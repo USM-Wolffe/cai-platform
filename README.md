@@ -1,6 +1,6 @@
-# cai-platform-v2
+# cai-platform
 
-`cai-platform-v2` is the new v2 investigation platform. It is a separate project from `cai-project` and starts from explicit contracts and package boundaries instead of vendor-shaped runtime code.
+`cai-platform` is the new v2 investigation platform. It is a separate project from `cai-project` and starts from explicit contracts and package boundaries instead of vendor-shaped runtime code.
 
 CAI is an external dependency in this repo. It is not vendored source here and should only appear through the CAI-facing orchestration app under `apps/cai-orchestrator/`.
 
@@ -71,8 +71,8 @@ docker compose version
 Use this as the canonical minimal bootstrap for the official current runtime model:
 
 ```bash
-git clone <your-repo-url> cai-platform-v2
-cd cai-platform-v2
+git clone https://github.com/USM-Wolffe/cai-platform.git
+cd cai-platform
 
 python3 -m venv .venv
 . .venv/bin/activate
@@ -91,7 +91,7 @@ Notes:
 - Ensure your shell user can run `docker` and `docker compose` on the host before using the API container path.
 
 ## Smoke Test
-Use the checked-in demo payloads at [examples/watchguard/minimal_payload.json](/home/seba/work/proyects/cai-platform-v2/examples/watchguard/minimal_payload.json) and [examples/phishing/minimal_payload.json](/home/seba/work/proyects/cai-platform-v2/examples/phishing/minimal_payload.json).
+Use the checked-in demo payloads at [examples/watchguard/minimal_payload.json](/home/seba/work/proyects/cai-platform/examples/watchguard/minimal_payload.json) and [examples/phishing/minimal_payload.json](/home/seba/work/proyects/cai-platform/examples/phishing/minimal_payload.json).
 
 Canonical end-to-end smoke test:
 
