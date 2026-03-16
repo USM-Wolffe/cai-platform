@@ -1,0 +1,10 @@
+{
+  "filters": [
+    {
+      "field": "src_ip",
+      "op": "eq",
+      "value": "10.0.0.1"
+    }
+  ],
+  "limit": 10
+}

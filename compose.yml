@@ -1,0 +1,10 @@
+services:
+  platform-api:
+    build:
+      context: .
+      dockerfile: apps/platform-api/Dockerfile
+    environment:
+      PLATFORM_API_HOST: 0.0.0.0
+      PLATFORM_API_PORT: 8000
+    ports:
+      - "${PLATFORM_API_PORT:-8000}:8000"

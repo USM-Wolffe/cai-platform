@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cai-platform-orchestrator"
+version = "0.1.0"
+description = "Thin CAI-facing orchestration app for cai-platform-v2"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "httpx>=0.28,<1",
+]
+
+[project.scripts]
+cai-orchestrator = "cai_orchestrator.app:main"
+
+[project.optional-dependencies]
+cai = [
+  "cai-framework>=0.5.10",
+]
+test = [
+  "cai-platform-api>=0.1.0",
+  "pytest>=8,<9",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

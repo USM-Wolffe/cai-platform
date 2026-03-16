@@ -1,0 +1,21 @@
+{
+  "subject": "Urgent action required: verify now",
+  "sender": {
+    "email": "security.alerts@gmail.com",
+    "display_name": "Security Support"
+  },
+  "reply_to": {
+    "email": "billing@corp-payments.example",
+    "display_name": "Billing Desk"
+  },
+  "urls": [
+    "http://198.51.100.7/login?verify=1"
+  ],
+  "text": "Immediately update your account. Payment required today to avoid suspension.",
+  "attachments": [
+    {
+      "filename": "invoice.zip",
+      "content_type": "application/zip"
+    }
+  ]
+}

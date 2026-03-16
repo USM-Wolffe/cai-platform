@@ -1,0 +1,7 @@
+{
+  "log_type": "traffic",
+  "csv_rows": [
+    "15/03/2026 00:00,,,,,ALLOW,allow-web,,TCP,,,10.0.0.1,51514,8.8.8.8,53,,,,,,,,traffic,dns-allow",
+    "15/03/2026 00:01,,,,,DENY,deny-dns,,UDP,,,10.0.0.2,51515,1.1.1.1,53,,,,,,,,traffic,dns-blocked"
+  ]
+}

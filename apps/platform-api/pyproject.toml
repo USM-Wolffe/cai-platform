@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cai-platform-api"
+version = "0.1.0"
+description = "Minimal deterministic HTTP API for cai-platform-v2"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "cai-platform-backends>=0.1.0",
+  "cai-platform-contracts>=0.1.0",
+  "cai-platform-core>=0.1.0",
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.32,<1",
+]
+
+[project.scripts]
+platform-api = "platform_api.app:main"
+
+[project.optional-dependencies]
+test = [
+  "httpx>=0.27,<1",
+  "pytest>=8,<9",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

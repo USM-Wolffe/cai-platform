@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cai-platform-backends"
+version = "0.1.0"
+description = "Deterministic backend implementations for cai-platform-v2"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "cai-platform-adapters>=0.1.0",
+  "cai-platform-contracts>=0.1.0",
+  "cai-platform-core>=0.1.0",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8,<9",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
