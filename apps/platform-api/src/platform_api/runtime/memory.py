@@ -7,8 +7,22 @@ from dataclasses import dataclass, field
 from hashlib import sha256
 from typing import Any
 
-from platform_backends.phishing_email import get_phishing_email_backend_descriptor
-from platform_backends.watchguard_logs import get_watchguard_logs_backend_descriptor
+from platform_adapters.watchguard import (
+    WATCHGUARD_WORKSPACE_S3_ZIP_SOURCE_KIND,
+    parse_workspace_s3_zip_reference,
+)
+from platform_backends.phishing_email import (
+    PHISHING_EMAIL_BACKEND_ID,
+    PHISHING_EMAIL_HEADER_ANALYSIS_OPERATION,
+    execute_header_analysis_observation as _execute_phishing_header_analysis,
+    execute_predefined_observation as _execute_phishing_email,
+    get_phishing_email_backend_descriptor,
+)
+from platform_backends.watchguard_logs import (
+    WATCHGUARD_LOGS_BACKEND_ID,
+    execute_predefined_observation as _execute_watchguard_logs,
+    get_watchguard_logs_backend_descriptor,
+)
 from platform_contracts import (
     ApprovalDecision,
     ApprovalScopeKind,
@@ -20,7 +34,6 @@ from platform_contracts import (
     DecisionRecord,
     EntityKind,
     EntityRef,
-    InvestigationDefinition,
     ObservationRequest,
     ObservationResult,
     QueryDefinition,
@@ -102,11 +115,6 @@ class InMemoryRunRepository:
         return saved.model_copy(deep=True)
 
 
-class InMemoryInvestigationDefinitionRepository:
-    def get_investigation_definition(self, investigation_definition_id: str) -> InvestigationDefinition | None:
-        return None
-
-
 class InProcessBackendRegistry:
     def __init__(self, descriptors: list[BackendDescriptor]) -> None:
         self._descriptors = {descriptor.backend_id: descriptor.model_copy(deep=True) for descriptor in descriptors}
@@ -168,7 +176,6 @@ class AppRuntime:
     case_repository: InMemoryCaseRepository
     artifact_repository: InMemoryArtifactRepository
     run_repository: InMemoryRunRepository
-    definition_repository: InMemoryInvestigationDefinitionRepository
     backend_registry: InProcessBackendRegistry
     approval_policy: DevelopmentApprovalPolicy
     audit_port: InMemoryAuditPort
@@ -186,6 +193,20 @@ class AppRuntime:
         labels: list[str],
         metadata: dict[str, Any],
     ) -> Artifact:
+        enriched_metadata = dict(metadata)
+        content_source = "attached_input_payload"
+        if payload.get("source") == WATCHGUARD_WORKSPACE_S3_ZIP_SOURCE_KIND:
+            reference = parse_workspace_s3_zip_reference(payload)
+            enriched_metadata = {
+                **enriched_metadata,
+                "workspace": reference.workspace,
+                "upload_prefix": reference.upload_prefix,
+                "bucket": reference.bucket,
+                "object_key": reference.object_key,
+                "source_kind": reference.source_kind,
+                "s3_uri": reference.s3_uri,
+            }
+            content_source = "attached_workspace_s3_zip_reference"
         serialized_payload = json.dumps(payload, sort_keys=True)
         content_hash = sha256(serialized_payload.encode("utf-8")).hexdigest()
         artifact = Artifact(
@@ -196,12 +217,12 @@ class AppRuntime:
             content_hash=f"sha256:{content_hash}",
             summary=summary,
             labels=labels,
-            metadata=metadata,
+            metadata=enriched_metadata,
         )
         return self.artifact_repository.save_artifact(
             artifact,
             payload=payload,
-            content_source="attached_input_payload",
+            content_source=content_source,
         )
 
     def save_derived_artifact(self, artifact: Artifact) -> Artifact:
@@ -286,18 +307,52 @@ class AppRuntime:
 
     def get_observation_input_artifact(self, *, run: Run, input_artifact_id: str | None = None) -> Artifact:
         artifact_id = input_artifact_id
+        available_refs = [*run.input_artifact_refs, *run.output_artifact_refs]
         if artifact_id is None:
-            if not run.input_artifact_refs:
+            if not available_refs:
                 raise InvalidStateError(f"run '{run.run_id}' has no bound input artifacts")
-            artifact_id = run.input_artifact_refs[0].id
+            artifact_id = available_refs[0].id
 
-        if all(ref.id != artifact_id for ref in run.input_artifact_refs):
+        if all(ref.id != artifact_id for ref in available_refs):
             raise InvalidStateError(f"artifact '{artifact_id}' is not bound to run '{run.run_id}'")
 
         artifact = self.artifact_repository.get_artifact(artifact_id)
         if artifact is None:
             raise NotFoundError(f"artifact '{artifact_id}' was not found")
         return artifact
+
+    def execute_observation(
+        self,
+        *,
+        run: Run,
+        input_artifact: Artifact,
+        input_payload: object,
+        observation_request: ObservationRequest,
+    ) -> object:
+        """Dispatch a predefined observation to the correct backend executor."""
+        backend_id = observation_request.backend_ref.id
+        if backend_id == WATCHGUARD_LOGS_BACKEND_ID:
+            return _execute_watchguard_logs(
+                run=run,
+                input_artifact=input_artifact,
+                input_payload=input_payload,
+                observation_request=observation_request,
+            )
+        if backend_id == PHISHING_EMAIL_BACKEND_ID:
+            if observation_request.operation_kind == PHISHING_EMAIL_HEADER_ANALYSIS_OPERATION:
+                return _execute_phishing_header_analysis(
+                    run=run,
+                    input_artifact=input_artifact,
+                    input_payload=input_payload,
+                    observation_request=observation_request,
+                )
+            return _execute_phishing_email(
+                run=run,
+                input_artifact=input_artifact,
+                input_payload=input_payload,
+                observation_request=observation_request,
+            )
+        raise NotFoundError(f"no executor registered for backend '{backend_id}'")
 
     def publish_query_artifacts(self, *, case: Case, run: Run, artifacts: list[Artifact]) -> tuple[Case, Run]:
         output_refs = [EntityRef(entity_type=EntityKind.ARTIFACT, id=artifact.artifact_id) for artifact in artifacts]
@@ -325,7 +380,6 @@ def build_default_runtime() -> AppRuntime:
         case_repository=InMemoryCaseRepository(),
         artifact_repository=InMemoryArtifactRepository(),
         run_repository=InMemoryRunRepository(),
-        definition_repository=InMemoryInvestigationDefinitionRepository(),
         backend_registry=InProcessBackendRegistry(
             [
                 get_watchguard_logs_backend_descriptor(),

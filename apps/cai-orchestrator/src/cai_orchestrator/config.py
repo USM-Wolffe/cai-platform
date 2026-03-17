@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 
 DEFAULT_PLATFORM_API_BASE_URL = "http://127.0.0.1:8000"
-DEFAULT_CAI_AGENT_TYPE = "platform_investigation_agent"
+DEFAULT_CAI_AGENT_TYPE = "egs-analist"
 
 
 @dataclass(frozen=True)

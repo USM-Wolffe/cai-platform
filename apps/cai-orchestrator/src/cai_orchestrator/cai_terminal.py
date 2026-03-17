@@ -16,7 +16,7 @@ from cai_orchestrator.config import (
 from cai_orchestrator.errors import MissingCaiDependencyError
 
 
-def build_platform_investigation_agent(
+def build_egs_analist_agent(
     *,
     platform_api_base_url: str,
     session: SyncHttpSession | None = None,
@@ -33,21 +33,38 @@ def build_platform_investigation_agent(
     client = PlatformApiClient(base_url=platform_api_base_url, session=session)
     service = PlatformApiToolService(platform_api_client=client)
 
-    @function_tool
+    @function_tool(strict_mode=False)
     def health() -> dict[str, Any]:
+        """Check that platform-api is reachable and healthy. Call this first if unsure whether the service is up."""
         return service.health()
 
-    @function_tool
-    def create_case(workflow_type: str, title: str, summary: str) -> dict[str, Any]:
-        return service.create_case(workflow_type=workflow_type, title=title, summary=summary)
+    @function_tool(strict_mode=False)
+    def create_case(
+        workflow_type: str,
+        title: str,
+        summary: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create a new investigation case. Returns a case_id needed for subsequent steps.
+        workflow_type must be one of the platform-supported types (e.g. 'log_investigation', 'phishing_assessment').
+        Always the first step of any investigation flow."""
+        return service.create_case(
+            workflow_type=workflow_type,
+            title=title,
+            summary=summary,
+            metadata=metadata,
+        )
 
-    @function_tool
+    @function_tool(strict_mode=False)
     def attach_input_artifact(
         case_id: str,
         payload_path: str,
         format: str = "json",
         summary: str = "CAI terminal payload attachment",
     ) -> dict[str, Any]:
+        """Attach a local JSON payload file to a case as an input artifact. Returns an artifact_id.
+        Use this when the operator provides a local file path containing the raw input data (e.g. WatchGuard CSV exported as JSON, phishing email metadata).
+        Do NOT use this for S3-stored workspace ZIPs — use attach_workspace_s3_zip_reference instead."""
         return service.attach_input_artifact(
             case_id=case_id,
             payload_path=payload_path,
@@ -55,69 +72,128 @@ def build_platform_investigation_agent(
             summary=summary,
         )
 
-    @function_tool
+    @function_tool(strict_mode=False)
+    def attach_workspace_s3_zip_reference(
+        case_id: str,
+        workspace: str,
+        s3_uri: str,
+        upload_prefix: str | None = None,
+        summary: str = "Workspace S3 ZIP reference",
+    ) -> dict[str, Any]:
+        """Attach a WatchGuard workspace ZIP stored in S3 as an input artifact reference. Returns an artifact_id.
+        Use this when the operator provides an S3 URI pointing to a workspace ZIP (not a local file).
+        After attaching, call execute_watchguard_workspace_zip_ingestion to materialize deterministic artifacts from the ZIP."""
+        return service.attach_workspace_s3_zip_reference(
+            case_id=case_id,
+            workspace=workspace,
+            s3_uri=s3_uri,
+            upload_prefix=upload_prefix,
+            summary=summary,
+        )
+
+    @function_tool(strict_mode=False)
     def create_run(
         case_id: str,
         backend_id: str,
         input_artifact_ids: list[str] | None = None,
     ) -> dict[str, Any]:
+        """Create a run for a case against a specific backend. Returns a run_id needed for observation calls.
+        backend_id identifies which backend will process the data (e.g. 'watchguard_logs', 'phishing_email').
+        Pass the artifact_ids from the attach step as input_artifact_ids.
+        Always call this after attaching input artifacts and before executing any observation."""
         return service.create_run(
             case_id=case_id,
             backend_id=backend_id,
             input_artifact_ids=input_artifact_ids,
         )
 
-    @function_tool
+    @function_tool(strict_mode=False)
     def execute_watchguard_normalize(
         run_id: str,
         requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
     ) -> dict[str, Any]:
+        """Normalize and summarize a WatchGuard log payload. Produces structured normalized records and a summary artifact.
+        Use this as the baseline WatchGuard observation — it parses raw traffic/event/alarm logs into a structured format.
+        Returns observation_result and output artifacts that can be read with read_artifact_content."""
         return service.execute_watchguard_normalize(
             run_id=run_id,
             requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
         )
 
-    @function_tool
+    @function_tool(strict_mode=False)
+    def execute_watchguard_workspace_zip_ingestion(
+        run_id: str,
+        requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Download and ingest a WatchGuard workspace ZIP from S3, materializing its contents as artifacts.
+        Call this after attach_workspace_s3_zip_reference to process the remote ZIP file.
+        After ingestion, the resulting artifacts can be used as inputs for normalize, filter, or analytics observations."""
+        return service.execute_watchguard_workspace_zip_ingestion(
+            run_id=run_id,
+            requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
+        )
+
+    @function_tool(strict_mode=False)
     def execute_watchguard_filter_denied(
         run_id: str,
         requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
     ) -> dict[str, Any]:
+        """Filter a WatchGuard log to denied traffic events only. Returns an artifact with only the denied-action records.
+        Useful when the operator wants to focus on blocked connections, policy denials, or security events."""
         return service.execute_watchguard_filter_denied(
             run_id=run_id,
             requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
         )
 
-    @function_tool
+    @function_tool(strict_mode=False)
     def execute_watchguard_analytics_basic(
         run_id: str,
         requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
     ) -> dict[str, Any]:
+        """Run a basic analytics bundle on a WatchGuard log. Produces aggregate statistics: traffic counts, action distribution, protocol breakdown, top policies.
+        Use this to get a high-level overview of traffic patterns before drilling down."""
         return service.execute_watchguard_analytics_basic(
             run_id=run_id,
             requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
         )
 
-    @function_tool
+    @function_tool(strict_mode=False)
     def execute_watchguard_top_talkers_basic(
         run_id: str,
         requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
     ) -> dict[str, Any]:
+        """Identify the top source/destination IP pairs by traffic volume in a WatchGuard log.
+        Use this to surface the most active or suspicious communication endpoints in the dataset."""
         return service.execute_watchguard_top_talkers_basic(
             run_id=run_id,
             requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
         )
 
-    @function_tool
+    @function_tool(strict_mode=False)
     def execute_phishing_email_basic_assessment(
         run_id: str,
         requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
     ) -> dict[str, Any]:
+        """Run a basic phishing email assessment on an email metadata payload.
+        Use this when the operator provides a phishing email artifact for triage or analysis."""
         return service.execute_phishing_email_basic_assessment(
             run_id=run_id,
             requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
         )
 
-    @function_tool
+    @function_tool(strict_mode=False)
     def execute_watchguard_guarded_custom_query(
         run_id: str,
         query: dict[str, Any],
@@ -126,7 +202,12 @@ def build_platform_investigation_agent(
         approver_kind: str = "human_operator",
         approver_ref: str | None = None,
         requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
     ) -> dict[str, Any]:
+        """Execute a custom guarded query on WatchGuard log rows with explicit operator approval.
+        Use this only when the operator explicitly authorizes a filtered row-level query (e.g. filtering by src_ip, dst_ip, action, protocol, policy).
+        Requires reason (why the query is needed) and approval_reason (explicit authorization statement from the operator).
+        query must be a dict with 'filters' (list of {field, op, value}) and optionally 'limit' and 'sort_by'."""
         return service.execute_watchguard_guarded_custom_query(
             run_id=run_id,
             query=query,
@@ -135,42 +216,52 @@ def build_platform_investigation_agent(
             approver_kind=approver_kind,
             approver_ref=approver_ref,
             requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
         )
 
-    @function_tool
+    @function_tool(strict_mode=False)
     def get_case(case_id: str) -> dict[str, Any]:
+        """Retrieve full case details including status, artifact refs, and metadata."""
         return service.get_case(case_id=case_id)
 
-    @function_tool
+    @function_tool(strict_mode=False)
     def get_run(run_id: str) -> dict[str, Any]:
+        """Retrieve full run details including input/output artifact refs and observation results."""
         return service.get_run(run_id=run_id)
 
-    @function_tool
+    @function_tool(strict_mode=False)
     def get_run_status(run_id: str) -> dict[str, Any]:
+        """Get the current status and observation result summary for a run. Use this to check if a run completed successfully."""
         return service.get_run_status(run_id=run_id)
 
-    @function_tool
+    @function_tool(strict_mode=False)
     def list_run_artifacts(run_id: str) -> dict[str, Any]:
+        """List all input and output artifacts bound to a run. Use this to discover artifact_ids before calling read_artifact_content."""
         return service.list_run_artifacts(run_id=run_id)
 
-    @function_tool
+    @function_tool(strict_mode=False)
     def read_artifact_content(artifact_id: str) -> dict[str, Any]:
+        """Read the stored content of an artifact. Use this to inspect the actual output of an observation (normalized records, analytics, filtered rows, etc.)."""
         return service.read_artifact_content(artifact_id=artifact_id)
 
     return Agent(
-        name="platform_investigation_agent",
-        description="Thin CAI-facing agent over the deterministic platform-api boundary.",
+        name="egs-analist",
+        description="Thin CAI-facing investigation agent over the deterministic platform-api boundary.",
         instructions=(
             "You operate only through platform-api tools. Do not assume direct backend access, "
             "local backend state, or any legacy local service topology. "
+            "Use attach_workspace_s3_zip_reference for workspace ZIPs stored in S3, "
+            "then execute_watchguard_workspace_zip_ingestion to materialize deterministic artifacts. "
             "When the operator provides a local payload path, use attach_input_artifact with that path. "
-            "Use get_case and get_run to inspect deterministic state after actions."
+            "Use list_run_artifacts, read_artifact_content, get_case, and get_run to inspect deterministic state after actions."
         ),
         tools=[
             health,
             create_case,
             attach_input_artifact,
+            attach_workspace_s3_zip_reference,
             create_run,
+            execute_watchguard_workspace_zip_ingestion,
             execute_watchguard_normalize,
             execute_watchguard_filter_denied,
             execute_watchguard_analytics_basic,
@@ -183,9 +274,25 @@ def build_platform_investigation_agent(
             list_run_artifacts,
             read_artifact_content,
         ],
-        tool_use_behavior="stop_on_first_tool",
         model=model,
     )
+
+
+def build_platform_investigation_agent(
+    *,
+    platform_api_base_url: str,
+    session: SyncHttpSession | None = None,
+    model: str | None = None,
+) -> Any:
+    """Compatibility wrapper kept while the visible agent name is `egs-analist`."""
+    return build_egs_analist_agent(
+        platform_api_base_url=platform_api_base_url,
+        session=session,
+        model=model,
+    )
+
+
+PHISHING_INVESTIGATOR_AGENT_TYPE = "phishing_investigator"
 
 
 def build_agent_from_settings(
@@ -196,7 +303,14 @@ def build_agent_from_settings(
 ) -> Any:
     """Build the configured CAI agent from the minimal supported agent set."""
     _validate_supported_agent_type(settings.cai_agent_type)
-    return build_platform_investigation_agent(
+    if settings.cai_agent_type == PHISHING_INVESTIGATOR_AGENT_TYPE:
+        from cai_orchestrator.phishing_agents import build_phishing_investigator_agent
+        return build_phishing_investigator_agent(
+            platform_api_base_url=settings.platform_api_base_url,
+            session=session,
+            model=model or settings.cai_model,
+        )
+    return build_egs_analist_agent(
         platform_api_base_url=settings.platform_api_base_url,
         session=session,
         model=model or settings.cai_model,
@@ -215,11 +329,17 @@ async def run_cai_terminal_session(
     _validate_supported_agent_type(resolved.cai_agent_type)
 
     try:
-        from cai.sdk.agents import Runner, set_tracing_disabled
+        from cai.sdk.agents import Runner, set_default_openai_api, set_tracing_disabled
     except ImportError as exc:
         raise MissingCaiDependencyError(
             "CAI is not installed. Install the optional 'cai' extra to run the CAI terminal session."
         ) from exc
+
+    # Use LiteLLM-backed chat completions when the model is not a plain OpenAI model
+    # (e.g. bedrock/..., anthropic/..., ollama/...). The Responses API only works with OpenAI.
+    effective_model = model or (resolved.cai_model if resolved else None)
+    if effective_model and "/" in effective_model:
+        set_default_openai_api("chat_completions")
 
     agent = build_agent_from_settings(resolved, session=session, model=model)
     set_tracing_disabled(True)
@@ -279,7 +399,9 @@ def _format_final_output(output: Any) -> str:
 
 
 def _validate_supported_agent_type(agent_type: str) -> None:
-    if agent_type != DEFAULT_CAI_AGENT_TYPE:
+    supported = {DEFAULT_CAI_AGENT_TYPE, "platform_investigation_agent", PHISHING_INVESTIGATOR_AGENT_TYPE}
+    if agent_type not in supported:
+        supported_list = ", ".join(f"'{t}'" for t in sorted(supported))
         raise ValueError(
-            f"unsupported CAI_AGENT_TYPE '{agent_type}'; only '{DEFAULT_CAI_AGENT_TYPE}' is supported in cai-platform-v2"
+            f"unsupported CAI_AGENT_TYPE '{agent_type}'; supported values are {supported_list}"
         )

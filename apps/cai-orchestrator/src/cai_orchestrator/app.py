@@ -23,6 +23,7 @@ from cai_orchestrator.flows import (
     WatchGuardInvestigationRequest,
     WatchGuardInvestigationResult,
     run_phishing_email_basic_assessment,
+    run_phishing_monitor_single_email,
     run_watchguard_analytics_bundle_basic,
     run_watchguard_filter_denied_events,
     run_watchguard_guarded_custom_query,
@@ -204,6 +205,12 @@ def run_cli(argv: list[str] | None = None) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 
+    if args.command == "run-phishing-monitor":
+        return _run_phishing_monitor_command(args)
+
+    if args.command == "run-phishing-investigate":
+        return _run_phishing_investigate_command(args)
+
     if args.command not in {
         "run-watchguard",
         "run-watchguard-filter-denied",
@@ -216,6 +223,25 @@ def run_cli(argv: list[str] | None = None) -> int:
 
     try:
         payload = _load_json_object(args.payload_file, value_name="payload")
+    except FileNotFoundError as exc:
+        _print_error({"error": {"type": "payload_file_not_found", "message": str(exc)}})
+        return 1
+    except json.JSONDecodeError as exc:
+        _print_error({"error": {"type": "invalid_payload_json", "message": f"payload file is not valid JSON: {exc.msg}"}})
+        return 1
+
+    query: dict[str, object] | None = None
+    if args.command == "run-watchguard-guarded-query":
+        try:
+            query = _load_json_object(args.query_file, value_name="query")
+        except FileNotFoundError as exc:
+            _print_error({"error": {"type": "query_file_not_found", "message": str(exc)}})
+            return 1
+        except json.JSONDecodeError as exc:
+            _print_error({"error": {"type": "invalid_query_json", "message": f"query file is not valid JSON: {exc.msg}"}})
+            return 1
+
+    try:
         orchestrator = create_orchestrator_app(
             platform_api_base_url=args.api_base_url or get_platform_api_base_url(),
         )
@@ -234,11 +260,7 @@ def run_cli(argv: list[str] | None = None) -> int:
                 )
             elif args.command == "run-watchguard-guarded-query":
                 result = orchestrator.start_watchguard_guarded_query_investigation(
-                    _build_watchguard_guarded_query_request(
-                        args,
-                        payload,
-                        _load_json_object(args.query_file, value_name="query"),
-                    )
+                    _build_watchguard_guarded_query_request(args, payload, query)  # type: ignore[arg-type]
                 )
             elif args.command == "run-phishing-email-basic-assessment":
                 result = orchestrator.start_phishing_email_basic_assessment(
@@ -250,29 +272,6 @@ def run_cli(argv: list[str] | None = None) -> int:
                 )
         finally:
             orchestrator.close()
-    except FileNotFoundError as exc:
-        file_type = "query_file_not_found" if getattr(exc, "filename", "") == getattr(args, "query_file", None) else "payload_file_not_found"
-        _print_error(
-            {
-                "error": {
-                    "type": file_type,
-                    "message": str(exc),
-                }
-            }
-        )
-        return 1
-    except json.JSONDecodeError as exc:
-        error_type = "invalid_query_json" if getattr(exc, "filename", "") == getattr(args, "query_file", None) else "invalid_payload_json"
-        message_prefix = "query file" if error_type == "invalid_query_json" else "payload file"
-        _print_error(
-            {
-                "error": {
-                    "type": error_type,
-                    "message": f"{message_prefix} is not valid JSON: {exc.msg}",
-                }
-            }
-        )
-        return 1
     except ValueError as exc:
         error_type = "invalid_query_shape" if args.command == "run-watchguard-guarded-query" and "query" in str(exc) else "invalid_payload_shape"
         _print_error(
@@ -346,6 +345,144 @@ def build_cai_watchguard_agent(
     )
 
 
+def _run_phishing_investigate_command(args: argparse.Namespace) -> int:
+    """Handle the run-phishing-investigate CLI command."""
+    from dataclasses import replace as dc_replace
+
+    from cai_orchestrator.cai_terminal import PHISHING_INVESTIGATOR_AGENT_TYPE
+
+    settings = load_cai_integration_settings()
+    settings = dc_replace(
+        settings,
+        platform_api_base_url=args.api_base_url or settings.platform_api_base_url,
+        cai_agent_type=PHISHING_INVESTIGATOR_AGENT_TYPE,
+        cai_model=args.model or settings.cai_model,
+    )
+
+    # Determine the prompt
+    if args.run_id and args.input_artifact_id:
+        prompt = (
+            f"Investigate run_id={args.run_id}, input_artifact_id={args.input_artifact_id}."
+        )
+    elif args.eml_file:
+        # Parse the .eml file, submit to platform-api, then investigate
+        try:
+            with open(args.eml_file, "rb") as f:
+                raw_eml = f.read()
+        except FileNotFoundError:
+            _print_error({"error": {"type": "eml_file_not_found", "message": f"file not found: {args.eml_file}"}})
+            return 1
+
+        api_base_url = args.api_base_url or get_platform_api_base_url()
+        try:
+            orchestrator = create_orchestrator_app(platform_api_base_url=api_base_url)
+            try:
+                from cai_orchestrator.flows import run_phishing_monitor_single_email
+                result = run_phishing_monitor_single_email(
+                    orchestrator.platform_api_client,
+                    raw_eml=raw_eml,
+                    title="Phishing investigation (CLI)",
+                    summary="Automated phishing investigation from run-phishing-investigate CLI.",
+                )
+            finally:
+                orchestrator.close()
+        except Exception as exc:
+            _print_error({"error": {"type": "submission_failed", "message": str(exc)}})
+            return 1
+
+        run_id = result.run.get("run_id", "")
+        artifact_id = result.input_artifact.get("artifact_id", "")
+        prompt = f"Investigate run_id={run_id}, input_artifact_id={artifact_id}."
+    else:
+        _print_error({
+            "error": {
+                "type": "missing_arguments",
+                "message": "Provide --eml-file or both --run-id and --input-artifact-id.",
+            }
+        })
+        return 1
+
+    try:
+        return run_cai_terminal(settings=settings, prompt=prompt)
+    except MissingCaiDependencyError as exc:
+        _print_error({"error": {"type": "missing_cai_dependency", "message": str(exc)}})
+        return 1
+    except ValueError as exc:
+        _print_error({"error": {"type": "invalid_cai_configuration", "message": str(exc)}})
+        return 1
+
+
+def _run_phishing_monitor_command(args: argparse.Namespace) -> int:
+    """Handle the run-phishing-monitor CLI command."""
+    import time
+
+    from cai_orchestrator.email_bridge import EmlExtractionError, extract_eml_attachment
+    from cai_orchestrator.imap_monitor import ImapMonitorConfigError, load_imap_monitor_settings, poll_unseen_messages
+
+    try:
+        settings = load_imap_monitor_settings()
+    except ImapMonitorConfigError as exc:
+        _print_error({"error": {"type": "imap_config_error", "message": str(exc)}})
+        return 1
+
+    api_base_url = args.api_base_url or get_platform_api_base_url()
+    title_prefix = args.title_prefix or "Phishing email"
+    once = args.once
+    dry_run = args.dry_run
+
+    def _process_once() -> int:
+        try:
+            raw_messages = poll_unseen_messages(settings)
+        except Exception as exc:
+            _print_error({"error": {"type": "imap_poll_error", "message": str(exc)}})
+            return 1
+
+        if not raw_messages:
+            print(json.dumps({"status": "no_unseen_messages"}, indent=2))
+            return 0
+
+        results = []
+        for i, raw_container in enumerate(raw_messages):
+            try:
+                raw_eml = extract_eml_attachment(raw_container)
+            except EmlExtractionError as exc:
+                results.append({"status": "skipped", "reason": str(exc), "index": i})
+                continue
+
+            if dry_run:
+                from cai_orchestrator.email_bridge import eml_bytes_to_structured_email_v2_payload
+                payload = eml_bytes_to_structured_email_v2_payload(raw_eml)
+                results.append({"status": "dry_run", "index": i, "payload_preview": {k: v for k, v in payload.items() if k not in ("html_body", "all_headers")}})
+                continue
+
+            try:
+                orchestrator = create_orchestrator_app(platform_api_base_url=api_base_url)
+                try:
+                    result = run_phishing_monitor_single_email(
+                        orchestrator.platform_api_client,
+                        raw_eml=raw_eml,
+                        title=f"{title_prefix} #{i + 1}",
+                        summary="Phishing email from IMAP monitor — automated analysis.",
+                    )
+                finally:
+                    orchestrator.close()
+                results.append({"status": "processed", "index": i, **result.to_dict()})
+            except Exception as exc:
+                results.append({"status": "error", "index": i, "message": str(exc)})
+
+        print(json.dumps({"processed": len(results), "results": results}, indent=2, sort_keys=True))
+        return 0
+
+    if once:
+        return _process_once()
+
+    # Continuous polling loop
+    print(json.dumps({"status": "starting_monitor", "poll_interval": settings.poll_interval, "mailbox": settings.mailbox}))
+    while True:
+        _process_once()
+        time.sleep(settings.poll_interval)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cai-orchestrator",
@@ -375,6 +512,61 @@ def _build_parser() -> argparse.ArgumentParser:
     phishing_email_basic_assessment = subparsers.add_parser(
         "run-phishing-email-basic-assessment",
         help="Run the phishing email basic assessment slice.",
+    )
+    phishing_monitor = subparsers.add_parser(
+        "run-phishing-monitor",
+        help="Poll IMAP mailbox for forwarded phishing emails and run the full assessment pipeline.",
+    )
+    phishing_monitor.add_argument(
+        "--title-prefix",
+        default="Phishing email",
+        help="Prefix for auto-generated case titles (e.g. 'Suspicious email').",
+    )
+    phishing_monitor.add_argument(
+        "--api-base-url",
+        default=None,
+        help="Override the platform-api base URL. Defaults to PLATFORM_API_BASE_URL or http://127.0.0.1:8000.",
+    )
+    phishing_monitor.add_argument(
+        "--once",
+        action="store_true",
+        default=False,
+        help="Poll once and exit instead of running continuously.",
+    )
+    phishing_monitor.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Parse emails and print payloads without submitting to platform-api.",
+    )
+    phishing_investigate = subparsers.add_parser(
+        "run-phishing-investigate",
+        help="Investigate one phishing email using the multi-agent CAI pipeline. Requires the cai extra.",
+    )
+    phishing_investigate.add_argument(
+        "--eml-file",
+        default=None,
+        help="Path to a raw .eml file to parse, submit to platform-api, and investigate.",
+    )
+    phishing_investigate.add_argument(
+        "--run-id",
+        default=None,
+        help="Existing run_id (use with --input-artifact-id if the run was already submitted).",
+    )
+    phishing_investigate.add_argument(
+        "--input-artifact-id",
+        default=None,
+        help="Input artifact_id for an existing run.",
+    )
+    phishing_investigate.add_argument(
+        "--api-base-url",
+        default=None,
+        help="Override the platform-api base URL.",
+    )
+    phishing_investigate.add_argument(
+        "--model",
+        default=None,
+        help="Override CAI_MODEL for this investigation.",
     )
     cai_terminal = subparsers.add_parser(
         "run-cai-terminal",
@@ -457,7 +649,7 @@ def _build_parser() -> argparse.ArgumentParser:
     cai_terminal.add_argument(
         "--agent-type",
         default=None,
-        help="Override CAI_AGENT_TYPE. Only platform_investigation_agent is supported.",
+        help="Override CAI_AGENT_TYPE. Defaults to egs-analist; the legacy platform_investigation_agent alias is still accepted.",
     )
     cai_terminal.add_argument(
         "--model",

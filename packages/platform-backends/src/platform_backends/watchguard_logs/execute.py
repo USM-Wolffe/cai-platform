@@ -3,16 +3,26 @@
 from __future__ import annotations
 
 from collections import Counter
+import csv
 from datetime import datetime, timezone
+import gzip
 import hashlib
+import io
 import json
+import tarfile
 from typing import Any
+import zipfile
 
 from platform_adapters.watchguard import (
+    WATCHGUARD_ALARM_LOG_TYPE,
+    WATCHGUARD_EVENT_LOG_TYPE,
+    WATCHGUARD_TRAFFIC_LOG_TYPE,
+    WATCHGUARD_WORKSPACE_S3_ZIP_SOURCE_KIND,
     WatchGuardAdapterError,
     filter_denied_watchguard_batch,
     inspect_watchguard_input_artifact,
     normalize_watchguard_log_payload,
+    parse_workspace_s3_zip_reference,
 )
 from platform_contracts import (
     Artifact,
@@ -34,6 +44,7 @@ from platform_backends.watchguard_logs.descriptor import (
     WATCHGUARD_LOGS_BACKEND_ID,
     WATCHGUARD_NORMALIZE_SUMMARY_OPERATION,
     WATCHGUARD_TOP_TALKERS_BASIC_OPERATION,
+    WATCHGUARD_WORKSPACE_ZIP_INGESTION_OPERATION,
 )
 from platform_backends.watchguard_logs.errors import (
     InvalidWatchGuardQueryError,
@@ -53,6 +64,11 @@ GUARDED_QUERY_MAX_LIMIT = 50
 GUARDED_QUERY_DEFAULT_LIMIT = 20
 GUARDED_QUERY_MAX_FILTERS = 5
 GUARDED_QUERY_MAX_IN_VALUES = 10
+WATCHGUARD_INGESTION_FAMILIES = (
+    WATCHGUARD_TRAFFIC_LOG_TYPE,
+    WATCHGUARD_EVENT_LOG_TYPE,
+    WATCHGUARD_ALARM_LOG_TYPE,
+)
 
 
 def execute_predefined_observation(
@@ -66,6 +82,13 @@ def execute_predefined_observation(
     try:
         _validate_observation_request(run=run, observation_request=observation_request)
         inspect_watchguard_input_artifact(input_artifact)
+        if observation_request.operation_kind == WATCHGUARD_WORKSPACE_ZIP_INGESTION_OPERATION:
+            return _execute_workspace_zip_ingestion(
+                run=run,
+                input_artifact=input_artifact,
+                input_payload=input_payload,
+                observation_request=observation_request,
+            )
         normalized_batch = normalize_watchguard_log_payload(input_payload)
         result_batch = _build_result_batch(
             normalized_batch=normalized_batch,
@@ -167,8 +190,70 @@ def execute_guarded_custom_query(
     )
 
 
+def _execute_workspace_zip_ingestion(
+    *,
+    run: Run,
+    input_artifact: Artifact,
+    input_payload: object,
+    observation_request: ObservationRequest,
+) -> WatchGuardExecutionOutcome:
+    reference = parse_workspace_s3_zip_reference(input_payload)
+    root_bytes = _download_s3_object(reference.bucket, reference.object_key)
+    discovered_files = _discover_workspace_files(root_bytes=root_bytes, root_name=reference.object_key)
+    family_payloads = _build_family_payloads(reference=reference, discovered_files=discovered_files)
+    manifest_payload = _build_ingestion_manifest(reference=reference, discovered_files=discovered_files, family_payloads=family_payloads)
+
+    artifacts = [
+        _build_workspace_manifest_artifact(
+            run=run,
+            observation_request=observation_request,
+            manifest_payload=manifest_payload,
+        )
+    ]
+    for family in WATCHGUARD_INGESTION_FAMILIES:
+        payload = family_payloads.get(family)
+        if payload is None:
+            continue
+        artifacts.append(
+            _build_workspace_family_artifact(
+                run=run,
+                observation_request=observation_request,
+                log_family=family,
+                artifact_payload=payload,
+            )
+        )
+
+    total_records = sum(int(payload["record_count"]) for payload in family_payloads.values())
+    status = ObservationStatus.SUCCEEDED if total_records > 0 else ObservationStatus.SUCCEEDED_NO_FINDINGS
+    observation_result = ObservationResult(
+        observation_ref=EntityRef(entity_type=EntityKind.OBSERVATION_REQUEST, id=observation_request.observation_id),
+        status=status,
+        output_artifact_refs=[EntityRef(entity_type=EntityKind.ARTIFACT, id=artifact.artifact_id) for artifact in artifacts],
+        structured_summary={
+            "workspace": reference.workspace,
+            "source_kind": WATCHGUARD_WORKSPACE_S3_ZIP_SOURCE_KIND,
+            "s3_uri": reference.s3_uri,
+            "artifact_count": len(artifacts),
+            "family_counts": manifest_payload["family_counts"],
+            "summary": (
+                f"Ingested workspace ZIP from {reference.s3_uri} and classified "
+                f"{total_records} rows across {len(family_payloads)} WatchGuard families."
+            ),
+        },
+        provenance={
+            "backend_id": WATCHGUARD_LOGS_BACKEND_ID,
+            "operation_kind": observation_request.operation_kind,
+            "source_kind": WATCHGUARD_WORKSPACE_S3_ZIP_SOURCE_KIND,
+            "workspace": reference.workspace,
+            "s3_uri": reference.s3_uri,
+        },
+    )
+    return WatchGuardExecutionOutcome(artifacts=artifacts, observation_result=observation_result)
+
+
 def _validate_observation_request(*, run: Run, observation_request: ObservationRequest) -> None:
     if observation_request.operation_kind not in {
+        WATCHGUARD_WORKSPACE_ZIP_INGESTION_OPERATION,
         WATCHGUARD_NORMALIZE_SUMMARY_OPERATION,
         WATCHGUARD_FILTER_DENIED_EVENTS_OPERATION,
         WATCHGUARD_ANALYTICS_BUNDLE_BASIC_OPERATION,
@@ -647,6 +732,8 @@ def _artifact_storage_ref(*, run_id: str, observation_id: str, operation_kind: s
 
 
 def _build_summary(*, operation_kind: str, record_count: int) -> str:
+    if operation_kind == WATCHGUARD_WORKSPACE_ZIP_INGESTION_OPERATION:
+        return f"Ingested {record_count} WatchGuard rows from a workspace ZIP in S3."
     if operation_kind == WATCHGUARD_ANALYTICS_BUNDLE_BASIC_OPERATION:
         return f"Built a basic WatchGuard analytics bundle from {record_count} log records."
     if operation_kind == WATCHGUARD_TOP_TALKERS_BASIC_OPERATION:
@@ -654,3 +741,344 @@ def _build_summary(*, operation_kind: str, record_count: int) -> str:
     if operation_kind == WATCHGUARD_FILTER_DENIED_EVENTS_OPERATION:
         return f"Filtered {record_count} denied WatchGuard log records."
     return f"Normalized {record_count} WatchGuard log records."
+
+
+def _download_s3_object(bucket: str, object_key: str) -> bytes:
+    try:
+        import boto3
+    except ImportError as exc:  # pragma: no cover
+        raise WatchGuardLogsBackendError("boto3 is required to ingest workspace ZIPs from S3") from exc
+
+    client = boto3.client("s3")
+    response = client.get_object(Bucket=bucket, Key=object_key)
+    body = response.get("Body")
+    if body is None:
+        raise WatchGuardLogsBackendError(f"s3://{bucket}/{object_key} returned no body")
+    content = body.read()
+    if not isinstance(content, bytes) or not content:
+        raise WatchGuardLogsBackendError(f"s3://{bucket}/{object_key} is empty")
+    return content
+
+
+def _discover_workspace_files(*, root_bytes: bytes, root_name: str) -> list[dict[str, Any]]:
+    discovered: list[dict[str, Any]] = []
+    _collect_archive_entries(
+        data=root_bytes,
+        path=root_name,
+        compression_chain=[],
+        discovered=discovered,
+    )
+    return discovered
+
+
+def _collect_archive_entries(
+    *,
+    data: bytes,
+    path: str,
+    compression_chain: list[str],
+    discovered: list[dict[str, Any]],
+) -> None:
+    normalized_path = path.replace("\\", "/")
+
+    if normalized_path.lower().endswith(".zip"):
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                for member in archive.infolist():
+                    if member.is_dir():
+                        continue
+                    _collect_archive_entries(
+                        data=archive.read(member),
+                        path=f"{normalized_path}!{member.filename}",
+                        compression_chain=[*compression_chain, "zip"],
+                        discovered=discovered,
+                    )
+        except zipfile.BadZipFile as exc:
+            raise WatchGuardLogsBackendError(f"invalid ZIP content encountered at '{normalized_path}'") from exc
+        return
+
+    if normalized_path.lower().endswith(".tar"):
+        try:
+            with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as archive:
+                for member in archive.getmembers():
+                    if not member.isfile():
+                        continue
+                    extracted = archive.extractfile(member)
+                    if extracted is None:
+                        continue
+                    _collect_archive_entries(
+                        data=extracted.read(),
+                        path=f"{normalized_path}!{member.name}",
+                        compression_chain=[*compression_chain, "tar"],
+                        discovered=discovered,
+                    )
+        except tarfile.TarError as exc:
+            raise WatchGuardLogsBackendError(f"invalid TAR content encountered at '{normalized_path}'") from exc
+        return
+
+    if normalized_path.lower().endswith(".gz"):
+        try:
+            decompressed = gzip.decompress(data)
+        except OSError as exc:
+            raise WatchGuardLogsBackendError(f"invalid GZ content encountered at '{normalized_path}'") from exc
+        decompressed_path = normalized_path[:-3]
+        _collect_archive_entries(
+            data=decompressed,
+            path=decompressed_path,
+            compression_chain=[*compression_chain, "gz"],
+            discovered=discovered,
+        )
+        return
+
+    if not normalized_path.lower().endswith((".csv", ".txt")):
+        return
+
+    classification = _classify_workspace_entry(normalized_path)
+    if classification is None:
+        return
+
+    text = data.decode("utf-8", errors="replace")
+    if not text.strip():
+        return
+
+    discovered.append(
+        {
+            "log_family": classification["log_family"],
+            "date": classification["date"],
+            "source_path_in_archive": normalized_path,
+            "compression_chain": list(compression_chain),
+            "text": text,
+        }
+    )
+
+
+def _classify_workspace_entry(path: str) -> dict[str, str] | None:
+    cleaned_path = path.replace("!", "/")
+    segments = [segment for segment in cleaned_path.split("/") if segment]
+    for index, segment in enumerate(segments[:-1]):
+        if segment not in WATCHGUARD_INGESTION_FAMILIES:
+            continue
+        if index + 1 >= len(segments):
+            continue
+        date_part = segments[index + 1]
+        if _is_date_segment(date_part):
+            return {"log_family": segment, "date": date_part}
+    return None
+
+
+def _is_date_segment(value: str) -> bool:
+    if len(value) != 10:
+        return False
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return False
+    return True
+
+
+def _build_family_payloads(
+    *,
+    reference,
+    discovered_files: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    grouped_files: dict[str, list[dict[str, Any]]] = {family: [] for family in WATCHGUARD_INGESTION_FAMILIES}
+    for item in discovered_files:
+        grouped_files[item["log_family"]].append(item)
+
+    payloads: dict[str, dict[str, Any]] = {}
+    for family, items in grouped_files.items():
+        if not items:
+            continue
+        if family == WATCHGUARD_TRAFFIC_LOG_TYPE:
+            payloads[family] = _build_traffic_family_payload(reference=reference, files=items)
+        else:
+            payloads[family] = _build_text_family_payload(reference=reference, log_family=family, files=items)
+    return payloads
+
+
+def _build_traffic_family_payload(*, reference, files: list[dict[str, Any]]) -> dict[str, Any]:
+    csv_rows: list[str] = []
+    source_files: list[dict[str, Any]] = []
+    date_counts: Counter[str] = Counter()
+
+    for item in files:
+        rows = _extract_csv_rows(item["text"])
+        if not rows:
+            continue
+        csv_rows.extend(rows)
+        source_files.append(_serialize_source_file(item=item, row_count=len(rows)))
+        date_counts[item["date"]] += len(rows)
+
+    if not csv_rows:
+        raise WatchGuardLogsBackendError("workspace ZIP ingestion did not produce any traffic CSV rows")
+
+    return {
+        "source": "workspace_zip_ingestion",
+        "workspace": reference.workspace,
+        "source_kind": WATCHGUARD_WORKSPACE_S3_ZIP_SOURCE_KIND,
+        "s3_uri": reference.s3_uri,
+        "upload_prefix": reference.upload_prefix,
+        "log_type": WATCHGUARD_TRAFFIC_LOG_TYPE,
+        "csv_rows": csv_rows,
+        "record_count": len(csv_rows),
+        "source_files": source_files,
+        "date_counts": {key: date_counts[key] for key in sorted(date_counts)},
+    }
+
+
+def _build_text_family_payload(*, reference, log_family: str, files: list[dict[str, Any]]) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    source_files: list[dict[str, Any]] = []
+    date_counts: Counter[str] = Counter()
+
+    for item in files:
+        extracted_rows = _extract_text_rows(item["text"])
+        if not extracted_rows:
+            continue
+        rows.extend(
+            {
+                "timestamp": _extract_timestamp_from_row(row),
+                "message": row,
+                "date": item["date"],
+                "source_path_in_archive": item["source_path_in_archive"],
+            }
+            for row in extracted_rows
+        )
+        source_files.append(_serialize_source_file(item=item, row_count=len(extracted_rows)))
+        date_counts[item["date"]] += len(extracted_rows)
+
+    return {
+        "source": "workspace_zip_ingestion",
+        "workspace": reference.workspace,
+        "source_kind": WATCHGUARD_WORKSPACE_S3_ZIP_SOURCE_KIND,
+        "s3_uri": reference.s3_uri,
+        "upload_prefix": reference.upload_prefix,
+        "log_family": log_family,
+        "rows": rows,
+        "record_count": len(rows),
+        "source_files": source_files,
+        "date_counts": {key: date_counts[key] for key in sorted(date_counts)},
+    }
+
+
+def _extract_csv_rows(text: str) -> list[str]:
+    rows: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            rows.append(stripped)
+    return rows
+
+
+def _extract_text_rows(text: str) -> list[str]:
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def _extract_timestamp_from_row(row: str) -> str | None:
+    first_cell = next(csv.reader([row]), [""])[0].strip()
+    if not first_cell:
+        return None
+    try:
+        return datetime.fromisoformat(first_cell.replace("Z", "+00:00")).astimezone(timezone.utc).isoformat(
+            timespec="seconds"
+        ).replace("+00:00", "Z")
+    except ValueError:
+        return None
+
+
+def _serialize_source_file(*, item: dict[str, Any], row_count: int) -> dict[str, Any]:
+    return {
+        "date": item["date"],
+        "row_count": row_count,
+        "source_path_in_archive": item["source_path_in_archive"],
+        "compression_chain": item["compression_chain"],
+    }
+
+
+def _build_ingestion_manifest(*, reference, discovered_files: list[dict[str, Any]], family_payloads: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    family_counts = {
+        family: {
+            "file_count": sum(1 for item in discovered_files if item["log_family"] == family),
+            "record_count": int(family_payloads.get(family, {}).get("record_count", 0)),
+        }
+        for family in WATCHGUARD_INGESTION_FAMILIES
+    }
+    return {
+        "source": "workspace_zip_ingestion",
+        "workspace": reference.workspace,
+        "source_kind": WATCHGUARD_WORKSPACE_S3_ZIP_SOURCE_KIND,
+        "s3_uri": reference.s3_uri,
+        "bucket": reference.bucket,
+        "object_key": reference.object_key,
+        "upload_prefix": reference.upload_prefix,
+        "discovered_file_count": len(discovered_files),
+        "family_counts": family_counts,
+        "source_files": [
+            {
+                "log_family": item["log_family"],
+                "date": item["date"],
+                "source_path_in_archive": item["source_path_in_archive"],
+                "compression_chain": item["compression_chain"],
+            }
+            for item in discovered_files
+        ],
+    }
+
+
+def _build_workspace_manifest_artifact(
+    *,
+    run: Run,
+    observation_request: ObservationRequest,
+    manifest_payload: dict[str, Any],
+) -> Artifact:
+    return Artifact(
+        kind=ArtifactKind.ANALYSIS_OUTPUT,
+        subtype="watchguard.workspace_zip_manifest",
+        format="json",
+        storage_ref=(
+            f"backend://watchguard_logs/runs/{run.run_id}/"
+            f"observations/{observation_request.observation_id}/workspace_zip_manifest.json"
+        ),
+        content_hash=_content_hash_for_payload(manifest_payload),
+        produced_by_backend_ref=EntityRef(entity_type=EntityKind.BACKEND, id=WATCHGUARD_LOGS_BACKEND_ID),
+        produced_by_run_ref=EntityRef(entity_type=EntityKind.RUN, id=run.run_id),
+        produced_by_observation_ref=EntityRef(
+            entity_type=EntityKind.OBSERVATION_REQUEST,
+            id=observation_request.observation_id,
+        ),
+        summary="Captured the deterministic manifest for a workspace ZIP ingestion.",
+        metadata=manifest_payload,
+    )
+
+
+def _build_workspace_family_artifact(
+    *,
+    run: Run,
+    observation_request: ObservationRequest,
+    log_family: str,
+    artifact_payload: dict[str, Any],
+) -> Artifact:
+    filename = f"{log_family}.json"
+    return Artifact(
+        kind=ArtifactKind.NORMALIZED,
+        subtype=f"watchguard.workspace_zip.{log_family}",
+        format="json",
+        storage_ref=(
+            f"backend://watchguard_logs/runs/{run.run_id}/"
+            f"observations/{observation_request.observation_id}/{filename}"
+        ),
+        content_hash=_content_hash_for_payload(artifact_payload),
+        produced_by_backend_ref=EntityRef(entity_type=EntityKind.BACKEND, id=WATCHGUARD_LOGS_BACKEND_ID),
+        produced_by_run_ref=EntityRef(entity_type=EntityKind.RUN, id=run.run_id),
+        produced_by_observation_ref=EntityRef(
+            entity_type=EntityKind.OBSERVATION_REQUEST,
+            id=observation_request.observation_id,
+        ),
+        summary=f"Materialized {artifact_payload['record_count']} {log_family} rows from a workspace ZIP.",
+        metadata=artifact_payload,
+    )
+
+
+def _content_hash_for_payload(payload: dict[str, Any]) -> str:
+    serialized_payload = json.dumps(payload, sort_keys=True)
+    digest = hashlib.sha256(serialized_payload.encode("utf-8")).hexdigest()
+    return f"sha256:{digest}"

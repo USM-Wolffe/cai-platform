@@ -1,0 +1,7 @@
+boto3<2,>=1
+cai-platform-adapters>=0.1.0
+cai-platform-contracts>=0.1.0
+cai-platform-core>=0.1.0
+
+[test]
+pytest<9,>=8

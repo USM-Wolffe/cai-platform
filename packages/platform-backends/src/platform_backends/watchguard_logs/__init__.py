@@ -12,6 +12,8 @@ from platform_backends.watchguard_logs.descriptor import (
     WATCHGUARD_NORMALIZE_SUMMARY_QUERY_CLASS,
     WATCHGUARD_TOP_TALKERS_BASIC_OPERATION,
     WATCHGUARD_TOP_TALKERS_BASIC_QUERY_CLASS,
+    WATCHGUARD_WORKSPACE_ZIP_INGESTION_OPERATION,
+    WATCHGUARD_WORKSPACE_ZIP_INGESTION_QUERY_CLASS,
     get_watchguard_logs_backend_descriptor,
 )
 from platform_backends.watchguard_logs.errors import (
@@ -40,6 +42,8 @@ __all__ = [
     "WATCHGUARD_NORMALIZE_SUMMARY_QUERY_CLASS",
     "WATCHGUARD_TOP_TALKERS_BASIC_OPERATION",
     "WATCHGUARD_TOP_TALKERS_BASIC_QUERY_CLASS",
+    "WATCHGUARD_WORKSPACE_ZIP_INGESTION_OPERATION",
+    "WATCHGUARD_WORKSPACE_ZIP_INGESTION_QUERY_CLASS",
     "WatchGuardCustomQueryOutcome",
     "WatchGuardExecutionOutcome",
     "WatchGuardLogsBackendError",

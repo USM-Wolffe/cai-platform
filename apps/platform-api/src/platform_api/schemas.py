@@ -18,6 +18,7 @@ class CreateCaseRequest(ApiModel):
     workflow_type: WorkflowType
     title: str = Field(min_length=1)
     summary: str = Field(min_length=1)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class AttachInputArtifactRequest(ApiModel):
@@ -35,12 +36,7 @@ class CreateRunRequest(ApiModel):
     scope: dict[str, Any] = Field(default_factory=dict)
 
 
-class ExecuteWatchGuardObservationRequest(ApiModel):
-    requested_by: str = Field(default="platform_api", min_length=1)
-    input_artifact_id: str | None = None
-
-
-class ExecutePhishingEmailObservationRequest(ApiModel):
+class ExecuteObservationRequest(ApiModel):
     requested_by: str = Field(default="platform_api", min_length=1)
     input_artifact_id: str | None = None
 

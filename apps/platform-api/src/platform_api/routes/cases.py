@@ -24,6 +24,7 @@ def create_case_endpoint(
         workflow_type=request.workflow_type,
         title=request.title,
         summary=request.summary,
+        metadata=request.metadata,
     )
     return serialize_case_summary(case=case, artifacts=[])
 

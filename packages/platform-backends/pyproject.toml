@@ -9,6 +9,7 @@ description = "Deterministic backend implementations for cai-platform-v2"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "boto3>=1,<2",
   "cai-platform-adapters>=0.1.0",
   "cai-platform-contracts>=0.1.0",
   "cai-platform-core>=0.1.0",

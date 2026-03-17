@@ -60,10 +60,10 @@ def test_phishing_email_basic_assessment_executes_through_the_api_path():
     execute_body = execute_response.json()
     assert execute_body["observation_result"]["status"] == "succeeded"
     assert execute_body["observation_result"]["structured_summary"]["risk_level"] == "high"
-    assert execute_body["observation_result"]["structured_summary"]["risk_score"] == 12
+    assert execute_body["observation_result"]["structured_summary"]["risk_score"] == 16  # 12 + 4 correlation bonus
     assert execute_body["artifacts"][0]["kind"] == "analysis_output"
     assert execute_body["artifacts"][0]["subtype"] == "phishing_email.basic_assessment"
-    assert execute_body["artifacts"][0]["metadata"]["signal_count"] == 6
+    assert execute_body["artifacts"][0]["metadata"]["signal_count"] == 7  # 6 + multi_signal_correlation
     assert execute_body["artifacts"][0]["metadata"]["triggered_rules"][0]["rule_id"] == "sender_reply_to_mismatch"
     assert execute_body["artifacts"][0]["metadata"]["suspicious_urls"][0]["reasons"] == [
         "uses a non-https scheme",

@@ -1,0 +1,9 @@
+cai-platform-backends>=0.1.0
+cai-platform-contracts>=0.1.0
+cai-platform-core>=0.1.0
+fastapi<1,>=0.115
+uvicorn<1,>=0.32
+
+[test]
+httpx<1,>=0.27
+pytest<9,>=8

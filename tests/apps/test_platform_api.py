@@ -1,6 +1,8 @@
 from .support import (
+    build_watchguard_workspace_zip_bytes,
     build_watchguard_traffic_csv_payload,
     build_watchguard_traffic_csv_row,
+    build_workspace_s3_zip_payload,
     create_test_client,
 )
 
@@ -100,6 +102,36 @@ def test_input_artifact_attachment_works():
     body = response.json()
     assert body["artifact"]["kind"] == "input"
     assert body["case"]["artifact_refs"][0]["id"] == body["artifact"]["artifact_id"]
+
+
+def test_workspace_zip_reference_attachment_enriches_artifact_metadata():
+    client = create_test_client()
+    case_id = client.post(
+        "/cases",
+        json={
+            "workflow_type": "log_investigation",
+            "title": "Workspace ZIP attach case",
+            "summary": "Case for S3 ZIP attachment.",
+        },
+    ).json()["case"]["case_id"]
+
+    response = client.post(
+        f"/cases/{case_id}/artifacts/input",
+        json={
+            "format": "json",
+            "payload": build_workspace_s3_zip_payload(
+                workspace="acme-lab",
+                s3_uri="s3://egslatam-cai-dev/workspaces/acme-lab/input/uploads/20260316_abc/logs.zip",
+            ),
+            "summary": "Workspace ZIP reference",
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["artifact"]["metadata"]["workspace"] == "acme-lab"
+    assert body["artifact"]["metadata"]["bucket"] == "egslatam-cai-dev"
+    assert body["artifact"]["metadata"]["object_key"].endswith("/logs.zip")
 
 
 def test_run_creation_works_for_supported_backend():
@@ -234,6 +266,93 @@ def test_first_predefined_observation_executes_through_the_api_path():
     assert len(case_body["artifacts"]) == 2
     assert len(run_body["output_artifacts"]) == 1
     assert run_body["observation_results"][0]["status"] == "succeeded"
+
+
+def test_workspace_zip_ingestion_executes_through_the_api_path(monkeypatch):
+    client = create_test_client()
+    case_id = client.post(
+        "/cases",
+        json={
+            "workflow_type": "log_investigation",
+            "title": "Workspace ZIP case",
+            "summary": "Case for workspace ZIP ingestion.",
+        },
+    ).json()["case"]["case_id"]
+    artifact_id = client.post(
+        f"/cases/{case_id}/artifacts/input",
+        json={
+            "format": "json",
+            "payload": build_workspace_s3_zip_payload(
+                workspace="acme-lab",
+                s3_uri="s3://egslatam-cai-dev/workspaces/acme-lab/input/uploads/20260316_abc/logs.zip",
+            ),
+        },
+    ).json()["artifact"]["artifact_id"]
+    run_id = client.post(
+        "/runs",
+        json={
+            "case_id": case_id,
+            "backend_id": "watchguard_logs",
+            "input_artifact_ids": [artifact_id],
+        },
+    ).json()["run"]["run_id"]
+
+    monkeypatch.setattr(
+        "platform_backends.watchguard_logs.execute._download_s3_object",
+        lambda bucket, object_key: build_watchguard_workspace_zip_bytes(
+            traffic_rows=[
+                build_watchguard_traffic_csv_row(
+                    timestamp="15/03/2026 00:00",
+                    action="ALLOW",
+                    policy="allow-web",
+                    protocol="TCP",
+                    src_ip="10.0.0.1",
+                    src_port=51514,
+                    dst_ip="8.8.8.8",
+                    dst_port=53,
+                ),
+                build_watchguard_traffic_csv_row(
+                    timestamp="15/03/2026 00:01",
+                    action="DENY",
+                    policy="deny-web",
+                    protocol="UDP",
+                    src_ip="10.0.0.2",
+                    src_port=51515,
+                    dst_ip="1.1.1.1",
+                    dst_port=53,
+                ),
+            ],
+            event_rows=[
+                "2025-10-23T09:26:52,FWStatus,ev,FW_PL1_CL_PRI,FW_XTM_PRI,loggerd,\\N,10976070,3D01-0003,Archived log file /var/log/traffic.log which reached max size",
+            ],
+            alarm_rows=[
+                "2025-10-22T09:00:03,Notify,al,FW_PL1_CL_PRI,FW_XTM_PRI,firewall,6,\\N,39632546,3000-0155,udp_flood_dos,email,Wed Oct 22 06:00:03 2025 (-03),UDP flood attack against 8.8.8.8 from 172.26.25.56 detected.",
+            ],
+        ),
+    )
+
+    ingest_response = client.post(
+        f"/runs/{run_id}/observations/watchguard-ingest-workspace-zip",
+        json={"requested_by": "test_client"},
+    )
+
+    assert ingest_response.status_code == 200
+    ingest_body = ingest_response.json()
+    assert ingest_body["observation_result"]["status"] == "succeeded"
+    assert ingest_body["observation_result"]["structured_summary"]["family_counts"]["traffic"]["record_count"] == 2
+    assert len(ingest_body["artifacts"]) == 4
+    traffic_artifact_id = next(
+        artifact["artifact_id"] for artifact in ingest_body["artifacts"] if artifact["subtype"] == "watchguard.workspace_zip.traffic"
+    )
+
+    analytics_response = client.post(
+        f"/runs/{run_id}/observations/watchguard-analytics-basic",
+        json={"requested_by": "test_client", "input_artifact_id": traffic_artifact_id},
+    )
+
+    assert analytics_response.status_code == 200
+    analytics_body = analytics_response.json()
+    assert analytics_body["observation_result"]["structured_summary"]["record_count"] == 2
 
 
 def test_invalid_payload_shape_fails_clearly():

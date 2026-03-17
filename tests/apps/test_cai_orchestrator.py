@@ -63,7 +63,11 @@ def test_platform_api_client_calls_expected_endpoints_for_the_first_slice():
 
     assert session.calls == [
         ("GET", "/health", None),
-        ("POST", "/cases", {"workflow_type": "log_investigation", "title": "Case", "summary": "Summary"}),
+        (
+            "POST",
+            "/cases",
+            {"workflow_type": "log_investigation", "title": "Case", "summary": "Summary", "metadata": {}},
+        ),
         (
             "POST",
             "/cases/case_123/artifacts/input",
@@ -123,6 +127,25 @@ def test_platform_api_client_calls_expected_endpoint_for_denied_filter_slice():
         (
             "POST",
             "/runs/run_123/observations/watchguard-filter-denied",
+            {"requested_by": "tester"},
+        ),
+    ]
+
+
+def test_platform_api_client_calls_expected_endpoint_for_workspace_zip_ingestion_slice():
+    session = QueuedSession(
+        responses=[
+            FakeResponse(200, {"observation_result": {"status": "succeeded"}}),
+        ]
+    )
+    client = PlatformApiClient(base_url="http://platform-api.local", session=session)
+
+    client.execute_watchguard_workspace_zip_ingestion(run_id="run_123", requested_by="tester")
+
+    assert session.calls == [
+        (
+            "POST",
+            "/runs/run_123/observations/watchguard-ingest-workspace-zip",
             {"requested_by": "tester"},
         ),
     ]

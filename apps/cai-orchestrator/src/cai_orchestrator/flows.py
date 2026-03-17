@@ -266,6 +266,106 @@ def run_phishing_email_basic_assessment(
     )
 
 
+@dataclass(frozen=True)
+class PhishingMonitorEmailResult:
+    """Structured result returned after processing one monitored phishing email."""
+
+    case: dict[str, Any]
+    input_artifact: dict[str, Any]
+    run: dict[str, Any]
+    basic_assessment: dict[str, Any]
+    header_analysis: dict[str, Any] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the result as a plain dictionary for CAI tools or other callers."""
+        return asdict(self)
+
+
+def run_phishing_monitor_single_email(
+    client: PlatformApiClient,
+    *,
+    raw_eml: bytes,
+    title: str,
+    summary: str,
+    requested_by: str = "cai_orchestrator",
+) -> PhishingMonitorEmailResult:
+    """Parse one raw .eml and run it through the full phishing assessment pipeline.
+
+    Executes:
+    1. create_case (defensive_analysis)
+    2. attach_input_artifact (structured_email_v2 payload)
+    3. create_run (phishing_email backend)
+    4. execute phishing-email-basic-assessment
+    5. execute phishing-email-header-analysis (requires structured_email_v2 input)
+    """
+    from cai_orchestrator.email_bridge import eml_bytes_to_structured_email_v2_payload
+
+    payload = eml_bytes_to_structured_email_v2_payload(raw_eml)
+
+    case_response = _run_phase(
+        phase="create_case",
+        operation=lambda: client.create_case(
+            workflow_type=PHISHING_EMAIL_WORKFLOW_TYPE,
+            title=title,
+            summary=summary,
+        ),
+    )
+    case_id = case_response["case"]["case_id"]
+
+    artifact_response = _run_phase(
+        phase="attach_input_artifact",
+        operation=lambda: client.attach_input_artifact(
+            case_id=case_id,
+            payload=payload,
+            format="json",
+            summary="Phishing email (structured_email_v2) from IMAP monitor",
+        ),
+    )
+    artifact_id = artifact_response["artifact"]["artifact_id"]
+
+    run_response = _run_phase(
+        phase="create_run",
+        operation=lambda: client.create_run(
+            case_id=case_id,
+            backend_id=PHISHING_EMAIL_BACKEND_ID,
+            input_artifact_ids=[artifact_id],
+        ),
+    )
+    run_id = run_response["run"]["run_id"]
+
+    basic_assessment_response = _run_phase(
+        phase="execute_phishing_email_basic_assessment",
+        operation=lambda: client.execute_phishing_email_basic_assessment(
+            run_id=run_id,
+            requested_by=requested_by,
+            input_artifact_id=artifact_id,
+        ),
+    )
+
+    header_analysis_response: dict[str, Any] | None = None
+    try:
+        header_analysis_response = _run_phase(
+            phase="execute_phishing_email_header_analysis",
+            operation=lambda: client.execute_phishing_email_header_analysis(
+                run_id=run_id,
+                requested_by=requested_by,
+                input_artifact_id=artifact_id,
+            ),
+        )
+    except OrchestrationFlowError:
+        pass  # header_analysis is best-effort for non-v2 inputs
+
+    final_run = header_analysis_response.get("run", basic_assessment_response.get("run", run_response["run"])) if header_analysis_response else basic_assessment_response.get("run", run_response["run"])
+
+    return PhishingMonitorEmailResult(
+        case=case_response["case"],
+        input_artifact=artifact_response["artifact"],
+        run=final_run,
+        basic_assessment=basic_assessment_response,
+        header_analysis=header_analysis_response,
+    )
+
+
 def _run_watchguard_operation(
     client: PlatformApiClient,
     request: WatchGuardInvestigationRequest,

@@ -33,6 +33,7 @@ Current endpoint surface:
 - `POST /cases/{case_id}/artifacts/input`
 - `POST /runs`
 - `GET /runs/{run_id}`
+- `POST /runs/{run_id}/observations/watchguard-ingest-workspace-zip`
 - `POST /runs/{run_id}/observations/watchguard-normalize`
 - `POST /runs/{run_id}/observations/watchguard-filter-denied`
 - `POST /runs/{run_id}/observations/watchguard-analytics-basic`
@@ -65,6 +66,8 @@ Operational note:
 - The current guarded custom query contract is one explicit filtered-row query shape over normalized WatchGuard traffic rows. It requires an explicit approval decision and does not expose raw SQL or a generic query router.
 - For this runtime, input artifact content is the attached payload and derived artifact content is the backend-emitted payload stored alongside the artifact record.
 - If a future artifact exists without stored readable content, `GET /artifacts/{artifact_id}/content` should fail clearly rather than inventing content.
+- All observation endpoints share a single `ExecuteObservationRequest` shape (`requested_by`, optional `input_artifact_id`). Backend-specific request fields are added as dedicated schemas when a backend actually requires them.
+- Backend execution is dispatched through `AppRuntime.execute_observation()`. Routes pass `backend_id` and `operation_kind` as identifiers; they do not import or call backend execution functions directly. Adding a new backend requires registering its executor in `AppRuntime`, not modifying routes.
 
 Runtime:
 - Run locally:

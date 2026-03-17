@@ -2,6 +2,7 @@ import pytest
 
 from platform_adapters.watchguard import (
     InvalidWatchGuardInputError,
+    WATCHGUARD_WORKSPACE_S3_ZIP_SOURCE_KIND,
     WATCHGUARD_SEMANTIC_RECORDS_INPUT_SHAPE,
     WATCHGUARD_TRAFFIC_CSV_INPUT_SHAPE,
     WATCHGUARD_TRAFFIC_LOG_TYPE,
@@ -9,6 +10,7 @@ from platform_adapters.watchguard import (
     inspect_watchguard_input_artifact,
     is_denied_watchguard_action,
     normalize_watchguard_log_payload,
+    parse_workspace_s3_zip_reference,
 )
 from platform_contracts import Artifact, ArtifactKind
 
@@ -175,3 +177,29 @@ def test_watchguard_adapter_filters_denied_and_blocked_actions_deterministically
     assert is_denied_watchguard_action("DENY") is True
     assert is_denied_watchguard_action("blocked") is True
     assert is_denied_watchguard_action("allow") is False
+
+
+def test_parse_workspace_s3_zip_reference_validates_and_derives_metadata():
+    reference = parse_workspace_s3_zip_reference(
+        {
+            "source": WATCHGUARD_WORKSPACE_S3_ZIP_SOURCE_KIND,
+            "workspace": "acme-lab",
+            "s3_uri": "s3://egslatam-cai-dev/workspaces/acme-lab/input/uploads/20260316_abc/logs.zip",
+        }
+    )
+
+    assert reference.workspace == "acme-lab"
+    assert reference.bucket == "egslatam-cai-dev"
+    assert reference.object_key == "workspaces/acme-lab/input/uploads/20260316_abc/logs.zip"
+    assert reference.upload_prefix == "workspaces/acme-lab/input/uploads/20260316_abc"
+
+
+def test_parse_workspace_s3_zip_reference_rejects_wrong_workspace_prefix():
+    with pytest.raises(InvalidWatchGuardInputError):
+        parse_workspace_s3_zip_reference(
+            {
+                "source": WATCHGUARD_WORKSPACE_S3_ZIP_SOURCE_KIND,
+                "workspace": "workspace-a",
+                "s3_uri": "s3://egslatam-cai-dev/workspaces/workspace-b/input/uploads/20260316_abc/logs.zip",
+            }
+        )

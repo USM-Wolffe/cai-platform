@@ -36,8 +36,10 @@ Current orchestration surface:
 - create case through `platform-api`
 - attach one input artifact through `platform-api`
 - create one run through `platform-api`
-- execute one of four predefined WatchGuard observations, one guarded custom query, or the phishing email basic assessment through `platform-api`
+- execute one of four predefined WatchGuard CLI observations (normalize, filter-denied, analytics-basic, top-talkers-basic), one guarded custom query, or the phishing email basic assessment through `platform-api`
 - return the structured result to the caller
+
+Note: the fifth WatchGuard observation (`watchguard-ingest-workspace-zip`) is available as a CAI terminal tool (`execute_watchguard_workspace_zip_ingestion`) but is not exposed as a standalone CLI subcommand. Use `run-cai-terminal` to drive workspace ZIP ingestion flows interactively.
 
 Still intentionally absent:
 - specialist meshes
@@ -114,13 +116,13 @@ Runtime:
   `python3 -m cai_orchestrator run-cai-terminal --prompt "Check health, create a case, attach examples/watchguard/minimal_payload.json, create a run, execute watchguard_logs.analytics_bundle_basic, then execute a guarded filtered query for src_ip 10.0.0.1 with human approval, then show the final run."`
   or
   `python3 -m cai_orchestrator run-cai-terminal --prompt "Check health, create a defensive_analysis case, attach examples/phishing/minimal_payload.json, create a run for phishing_email, execute phishing_email.basic_assessment, then show the final run."`
-- The CAI terminal tool surface now also includes `execute_phishing_email_basic_assessment`, `execute_watchguard_guarded_custom_query`, `get_run_status`, `list_run_artifacts`, and `read_artifact_content`.
+- The CAI terminal tool surface includes: `health`, `create_case`, `attach_input_artifact`, `attach_workspace_s3_zip_reference`, `create_run`, `execute_watchguard_workspace_zip_ingestion`, `execute_watchguard_normalize`, `execute_watchguard_filter_denied`, `execute_watchguard_analytics_basic`, `execute_watchguard_top_talkers_basic`, `execute_phishing_email_basic_assessment`, `execute_watchguard_guarded_custom_query`, `get_case`, `get_run`, `get_run_status`, `list_run_artifacts`, `read_artifact_content`. Each tool carries a docstring that the LLM uses to reason about when and how to call it.
 - Only `make demo-watchguard` and `make demo-phishing-email` exist as Makefile shorthands. The rest of the runtime surface stays explicit through the CLI commands above.
 - CAI is optional for this app. The baseline WatchGuard and phishing CLI flows do not require the CAI extra.
 - AWS CLI and MCP are not required for the current local stack.
 - Useful env names carried forward from old operator ergonomics:
   - `PLATFORM_API_BASE_URL`
-  - `CAI_AGENT_TYPE` (only `platform_investigation_agent` is supported here)
+  - `CAI_AGENT_TYPE` — canonical value is `egs-analist` (default); `platform_investigation_agent` is accepted as a legacy alias. Both resolve to the same agent.
   - `CAI_MODEL` (optional pass-through to the external CAI SDK)
 - `.env.example` at the repo root documents the minimal supported env surface.
 - Those values are not auto-loaded in this pass; export them in the shell or pass `--api-base-url` directly.

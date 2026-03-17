@@ -15,6 +15,7 @@ PHISHING_EMAIL_BACKEND_ID = "phishing_email"
 PHISHING_EMAIL_BACKEND_TYPE = "phishing_email"
 PHISHING_EMAIL_BASIC_ASSESSMENT_QUERY_CLASS = "phishing_email.basic_assessment"
 PHISHING_EMAIL_BASIC_ASSESSMENT_OPERATION = "phishing_email.basic_assessment"
+PHISHING_EMAIL_HEADER_ANALYSIS_OPERATION = "phishing_email.header_analysis"
 
 
 def get_phishing_email_backend_descriptor() -> BackendDescriptor:

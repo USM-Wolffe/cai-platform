@@ -6,25 +6,36 @@ import csv
 import io
 from collections import Counter
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 from typing import Any
 
 from platform_contracts import Artifact, ArtifactKind
 
 from platform_adapters.watchguard.errors import InvalidWatchGuardInputError, UnsupportedWatchGuardArtifactError
-from platform_adapters.watchguard.types import NormalizedWatchGuardBatch, WatchGuardLogRecord
+from platform_adapters.watchguard.types import (
+    NormalizedWatchGuardBatch,
+    WatchGuardLogRecord,
+    WatchGuardWorkspaceZipReference,
+)
 
 SUPPORTED_INPUT_FORMATS = {"json"}
 WATCHGUARD_TRAFFIC_LOG_TYPE = "traffic"
+WATCHGUARD_EVENT_LOG_TYPE = "event"
+WATCHGUARD_ALARM_LOG_TYPE = "alarm"
+WATCHGUARD_WORKSPACE_S3_ZIP_SOURCE_KIND = "workspace_s3_zip"
 WATCHGUARD_SEMANTIC_RECORDS_INPUT_SHAPE = "semantic_records"
 WATCHGUARD_TRAFFIC_CSV_INPUT_SHAPE = "traffic_csv_export"
+WATCHGUARD_WORKSPACE_S3_ZIP_INPUT_SHAPE = "workspace_s3_zip_reference"
 REQUIRED_RECORD_FIELDS = {"timestamp", "action", "src_ip", "dst_ip"}
 DENIED_ACTIONS = {"deny", "denied", "block", "blocked"}
 
 
 def inspect_watchguard_input_artifact(artifact: Artifact) -> None:
     """Validate that the artifact contract is acceptable for the current WatchGuard slice."""
-    if artifact.kind != ArtifactKind.INPUT:
-        raise UnsupportedWatchGuardArtifactError("watchguard_logs only accepts input artifacts")
+    if artifact.kind not in {ArtifactKind.INPUT, ArtifactKind.NORMALIZED}:
+        raise UnsupportedWatchGuardArtifactError(
+            "watchguard_logs only accepts input artifacts or normalized WatchGuard ingestion artifacts"
+        )
     if artifact.format not in SUPPORTED_INPUT_FORMATS:
         raise UnsupportedWatchGuardArtifactError(
             f"watchguard_logs only accepts formats: {', '.join(sorted(SUPPORTED_INPUT_FORMATS))}"
@@ -46,6 +57,56 @@ def normalize_watchguard_log_payload(payload: Any) -> NormalizedWatchGuardBatch:
 
     raise InvalidWatchGuardInputError(
         "watchguard payload must include either 'records' or {'log_type': 'traffic', 'csv_text' | 'csv_rows'}"
+    )
+
+
+def parse_workspace_s3_zip_reference(payload: Any) -> WatchGuardWorkspaceZipReference:
+    """Validate and parse the stable JSON wrapper used for workspace ZIP ingestion."""
+    if not isinstance(payload, dict):
+        raise InvalidWatchGuardInputError(
+            "workspace ZIP payload must be a mapping with source='workspace_s3_zip', workspace, and s3_uri"
+        )
+
+    source_kind = payload.get("source")
+    if source_kind != WATCHGUARD_WORKSPACE_S3_ZIP_SOURCE_KIND:
+        raise InvalidWatchGuardInputError(
+            "workspace ZIP payload must include {'source': 'workspace_s3_zip'}"
+        )
+
+    workspace = payload.get("workspace")
+    if not isinstance(workspace, str) or not workspace.strip():
+        raise InvalidWatchGuardInputError("workspace ZIP payload requires a non-empty 'workspace' string")
+    workspace = workspace.strip()
+
+    s3_uri = payload.get("s3_uri")
+    if not isinstance(s3_uri, str) or not s3_uri.strip():
+        raise InvalidWatchGuardInputError("workspace ZIP payload requires a non-empty 's3_uri' string")
+    s3_uri = s3_uri.strip()
+
+    bucket, object_key = _parse_s3_uri(s3_uri)
+    expected_prefix = f"workspaces/{workspace}/input/uploads/"
+    if expected_prefix not in object_key:
+        raise InvalidWatchGuardInputError(
+            "workspace ZIP s3_uri must point under "
+            f"'s3://<bucket>/workspaces/{workspace}/input/uploads/...'"
+        )
+
+    upload_prefix = payload.get("upload_prefix")
+    normalized_upload_prefix: str | None = None
+    if upload_prefix is not None:
+        if not isinstance(upload_prefix, str) or not upload_prefix.strip():
+            raise InvalidWatchGuardInputError("workspace ZIP payload 'upload_prefix' must be a non-empty string")
+        normalized_upload_prefix = upload_prefix.strip().strip("/")
+    else:
+        zip_name = object_key.rsplit("/", 1)[-1]
+        normalized_upload_prefix = object_key[: -len(zip_name)].rstrip("/")
+
+    return WatchGuardWorkspaceZipReference(
+        workspace=workspace,
+        s3_uri=s3_uri,
+        bucket=bucket,
+        object_key=object_key,
+        upload_prefix=normalized_upload_prefix,
     )
 
 
@@ -278,3 +339,13 @@ def _safe_int(value: str | None, *, field_name: str, index: int) -> int | None:
         raise InvalidWatchGuardInputError(
             f"watchguard traffic CSV row at index {index} has invalid '{field_name}'"
         ) from exc
+
+
+def _parse_s3_uri(value: str) -> tuple[str, str]:
+    parsed = urlparse(value)
+    if parsed.scheme != "s3" or not parsed.netloc or not parsed.path:
+        raise InvalidWatchGuardInputError("workspace ZIP payload 's3_uri' must be a valid s3://bucket/key URI")
+    object_key = parsed.path.lstrip("/")
+    if not object_key:
+        raise InvalidWatchGuardInputError("workspace ZIP payload 's3_uri' must include an object key")
+    return parsed.netloc, object_key

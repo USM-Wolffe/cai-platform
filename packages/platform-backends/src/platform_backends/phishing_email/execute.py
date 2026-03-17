@@ -29,6 +29,7 @@ from platform_core import ContractViolationError
 from platform_backends.phishing_email.descriptor import (
     PHISHING_EMAIL_BACKEND_ID,
     PHISHING_EMAIL_BASIC_ASSESSMENT_OPERATION,
+    PHISHING_EMAIL_HEADER_ANALYSIS_OPERATION,
 )
 from platform_backends.phishing_email.errors import (
     PhishingEmailBackendError,
@@ -49,6 +50,16 @@ FREE_MAIL_DOMAINS = {
     "protonmail.com",
     "icloud.com",
     "aol.com",
+    "live.com",
+    "msn.com",
+    "yandex.com",
+    "yandex.ru",
+    "mail.com",
+    "zoho.com",
+    "fastmail.com",
+    "pm.me",
+    "tutanota.com",
+    "guerrillamail.com",
 }
 TRUSTED_DISPLAY_NAME_TERMS = (
     "support",
@@ -66,12 +77,24 @@ URGENCY_TERMS = (
     "suspended",
     "final notice",
     "asap",
+    "act now",
+    "account suspended",
+    "limited time",
+    "expires today",
+    "verify immediately",
+    "confirm now",
+    "click here immediately",
 )
 THEME_PHRASES = (
     "account verification",
     "password reset",
     "payment required",
     "update your account",
+    "wire transfer",
+    "gift card",
+    "crypto payment",
+    "bank account",
+    "confirm your identity",
 )
 THEME_KEYWORDS = (
     "login",
@@ -83,7 +106,26 @@ THEME_KEYWORDS = (
     "invoice",
     "bank",
     "gift card",
+    "wire",
+    "transfer",
+    "crypto",
+    "bitcoin",
+    "credential",
 )
+MIME_EXTENSION_EXPECTATIONS: dict[str, set[str]] = {
+    ".pdf": {"application/pdf"},
+    ".doc": {"application/msword"},
+    ".docx": {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+    ".xls": {"application/vnd.ms-excel"},
+    ".xlsx": {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+    ".zip": {"application/zip", "application/x-zip-compressed"},
+    ".png": {"image/png"},
+    ".jpg": {"image/jpeg"},
+    ".jpeg": {"image/jpeg"},
+    ".html": {"text/html"},
+    ".htm": {"text/html"},
+    ".txt": {"text/plain"},
+}
 SUSPICIOUS_URL_SHORTENERS = {"bit.ly", "tinyurl.com", "t.co"}
 SUSPICIOUS_URL_TERMS = ("login", "verify", "reset", "update", "invoice", "payment")
 SUSPICIOUS_ATTACHMENT_EXTENSIONS = (
@@ -154,11 +196,7 @@ def execute_predefined_observation(
             observation_request=observation_request,
             artifact_payload=artifact_payload,
         )
-        observation_status = (
-            ObservationStatus.SUCCEEDED_NO_FINDINGS
-            if risk_score == 0
-            else ObservationStatus.SUCCEEDED
-        )
+        observation_status = _derive_observation_status(risk_score=risk_score, triggered_rules=triggered_rules)
         observation_result = ObservationResult(
             observation_ref=EntityRef(entity_type=EntityKind.OBSERVATION_REQUEST, id=observation_request.observation_id),
             status=observation_status,
@@ -200,6 +238,209 @@ def execute_predefined_observation(
                 },
             ),
         )
+
+
+def execute_header_analysis_observation(
+    *,
+    run: Run,
+    input_artifact: Artifact,
+    input_payload: object,
+    observation_request: ObservationRequest,
+) -> PhishingEmailExecutionOutcome:
+    """Execute header-based phishing analysis on a structured_email_v2 input."""
+    from platform_adapters.phishing_email_mime.normalize import normalize_mime_email_bytes
+    from platform_adapters.phishing_email_mime.types import NormalizedMimeEmail
+    from platform_backends.phishing_email.header_rules import evaluate_header_rules
+
+    try:
+        if observation_request.operation_kind != PHISHING_EMAIL_HEADER_ANALYSIS_OPERATION:
+            raise UnsupportedPhishingEmailObservationError(
+                f"unsupported operation_kind '{observation_request.operation_kind}'"
+            )
+        if observation_request.run_ref.id != run.run_id:
+            raise ContractViolationError("observation_request.run_ref must match the target run")
+        if run.backend_ref.id != PHISHING_EMAIL_BACKEND_ID:
+            raise UnsupportedPhishingEmailObservationError("run backend is not phishing_email")
+
+        if not isinstance(input_payload, dict):
+            raise PhishingEmailBackendError("header_analysis requires a dict input_payload")
+
+        # Accept a pre-parsed NormalizedMimeEmail dict (structured_email_v2) or raw bytes string
+        input_shape = input_payload.get("input_shape", "")
+        if input_shape != "structured_email_v2":
+            raise PhishingEmailBackendError(
+                f"header_analysis requires input_shape 'structured_email_v2', got '{input_shape}'"
+            )
+
+        normalized = _payload_to_normalized_mime_email(input_payload)
+        triggered_rules = evaluate_header_rules(normalized)
+        risk_score = sum(rule.weight for rule in triggered_rules)
+        risk_level = _derive_risk_level(risk_score)
+        signal_count = len(triggered_rules)
+        summary = _build_summary(risk_level=risk_level, signal_count=signal_count, risk_score=risk_score)
+
+        artifact_payload = {
+            "operation_kind": PHISHING_EMAIL_HEADER_ANALYSIS_OPERATION,
+            "input_shape": "structured_email_v2",
+            "authentication_results": (
+                None
+                if normalized.authentication_results is None
+                else {
+                    "spf": normalized.authentication_results.spf,
+                    "dkim": normalized.authentication_results.dkim,
+                    "dmarc": normalized.authentication_results.dmarc,
+                }
+            ),
+            "received_chain_length": len(normalized.received_chain),
+            "risk_level": risk_level,
+            "risk_score": risk_score,
+            "signal_count": signal_count,
+            "triggered_rules": [
+                {
+                    "rule_id": rule.rule_id,
+                    "category": rule.category,
+                    "weight": rule.weight,
+                    "message": rule.message,
+                    "evidence": rule.evidence,
+                }
+                for rule in triggered_rules
+            ],
+            "summary": summary,
+        }
+
+        serialized_payload = json.dumps(artifact_payload, sort_keys=True)
+        content_hash = hashlib.sha256(serialized_payload.encode("utf-8")).hexdigest()
+        output_artifact = Artifact(
+            kind=ArtifactKind.ANALYSIS_OUTPUT,
+            subtype="phishing_email.header_analysis",
+            format="json",
+            storage_ref=(
+                f"backend://phishing_email/runs/{run.run_id}/"
+                f"observations/{observation_request.observation_id}/header_analysis.json"
+            ),
+            content_hash=f"sha256:{content_hash}",
+            produced_by_backend_ref=EntityRef(entity_type=EntityKind.BACKEND, id=PHISHING_EMAIL_BACKEND_ID),
+            produced_by_run_ref=EntityRef(entity_type=EntityKind.RUN, id=run.run_id),
+            produced_by_observation_ref=EntityRef(
+                entity_type=EntityKind.OBSERVATION_REQUEST,
+                id=observation_request.observation_id,
+            ),
+            summary=summary,
+            metadata=artifact_payload,
+        )
+        observation_status = _derive_observation_status(risk_score=risk_score, triggered_rules=triggered_rules)
+        observation_result = ObservationResult(
+            observation_ref=EntityRef(entity_type=EntityKind.OBSERVATION_REQUEST, id=observation_request.observation_id),
+            status=observation_status,
+            output_artifact_refs=[
+                EntityRef(entity_type=EntityKind.ARTIFACT, id=output_artifact.artifact_id),
+            ],
+            structured_summary={
+                "risk_level": risk_level,
+                "risk_score": risk_score,
+                "signal_count": signal_count,
+                "triggered_rule_ids": [rule.rule_id for rule in triggered_rules],
+                "summary": summary,
+            },
+            provenance={
+                "backend_id": PHISHING_EMAIL_BACKEND_ID,
+                "operation_kind": observation_request.operation_kind,
+                "input_shape": "structured_email_v2",
+            },
+        )
+        return PhishingEmailExecutionOutcome(
+            artifacts=[output_artifact],
+            observation_result=observation_result,
+        )
+    except (PhishingEmailBackendError, ContractViolationError) as exc:
+        return PhishingEmailExecutionOutcome(
+            artifacts=[],
+            observation_result=ObservationResult(
+                observation_ref=EntityRef(
+                    entity_type=EntityKind.OBSERVATION_REQUEST,
+                    id=observation_request.observation_id,
+                ),
+                status=ObservationStatus.FAILED,
+                structured_summary={"summary": "Phishing email header analysis failed."},
+                errors=[str(exc)],
+                provenance={
+                    "backend_id": PHISHING_EMAIL_BACKEND_ID,
+                    "operation_kind": observation_request.operation_kind,
+                },
+            ),
+        )
+
+
+def _payload_to_normalized_mime_email(payload: dict) -> object:
+    """Convert a structured_email_v2 dict payload to a NormalizedMimeEmail.
+
+    If the payload contains a 'raw_eml_bytes_hex' key it re-parses from raw bytes;
+    otherwise it reconstructs from the dict fields (the wire format for pre-parsed emails).
+    """
+    from platform_adapters.phishing_email_mime.normalize import normalize_mime_email_bytes
+    from platform_adapters.phishing_email_mime.types import (
+        AuthenticationResult,
+        NormalizedMimeEmail,
+        ReceivedHop,
+    )
+    from platform_adapters.phishing_email.types import PhishingEmailAttachment, PhishingEmailParty
+
+    raw_hex = payload.get("raw_eml_bytes_hex")
+    if raw_hex:
+        return normalize_mime_email_bytes(bytes.fromhex(raw_hex))
+
+    # Reconstruct from pre-serialized v2 dict
+    def _party(d) -> PhishingEmailParty | None:
+        if d is None:
+            return None
+        return PhishingEmailParty(
+            email=d.get("email", ""),
+            domain=d.get("domain", d.get("email", "").split("@")[-1] if "@" in d.get("email", "") else ""),
+            display_name=d.get("display_name"),
+        )
+
+    def _attachment(d) -> PhishingEmailAttachment:
+        return PhishingEmailAttachment(filename=d.get("filename", ""), content_type=d.get("content_type"))
+
+    def _hop(d) -> ReceivedHop:
+        return ReceivedHop(
+            from_host=d.get("from_host"),
+            by_host=d.get("by_host"),
+            with_protocol=d.get("with_protocol"),
+            timestamp=d.get("timestamp"),
+            raw=d.get("raw", ""),
+        )
+
+    def _auth(d) -> AuthenticationResult | None:
+        if d is None:
+            return None
+        return AuthenticationResult(
+            spf=d.get("spf"),
+            dkim=d.get("dkim"),
+            dmarc=d.get("dmarc"),
+            raw=d.get("raw"),
+        )
+
+    sender_raw = payload.get("sender") or {}
+    reply_to_raw = payload.get("reply_to")
+    return NormalizedMimeEmail(
+        subject=payload.get("subject", ""),
+        sender=_party(sender_raw) or PhishingEmailParty(email="", domain=""),
+        reply_to=_party(reply_to_raw),
+        urls=tuple(payload.get("urls") or []),
+        text=payload.get("text", ""),
+        attachments=tuple(_attachment(a) for a in (payload.get("attachments") or [])),
+        input_shape="structured_email_v2",
+        message_id=payload.get("message_id"),
+        date=payload.get("date"),
+        html_body=payload.get("html_body"),
+        plain_text_body=payload.get("plain_text_body"),
+        received_chain=tuple(_hop(h) for h in (payload.get("received_chain") or [])),
+        authentication_results=_auth(payload.get("authentication_results")),
+        x_originating_ip=payload.get("x_originating_ip"),
+        x_mailer=payload.get("x_mailer"),
+        all_headers=payload.get("all_headers") or {},
+    )
 
 
 def _validate_observation_request(*, run: Run, observation_request: ObservationRequest) -> None:
@@ -308,6 +549,18 @@ def _evaluate_rules(normalized_email) -> tuple[list[PhishingTriggeredRule], list
             )
         )
 
+    correlation_bonus = _compute_correlation_bonus(triggered_rules)
+    if correlation_bonus > 0:
+        triggered_rules.append(
+            PhishingTriggeredRule(
+                rule_id="multi_signal_correlation",
+                category="correlation",
+                weight=correlation_bonus,
+                message=f"Multiple independent phishing signals ({len(triggered_rules) - 1}) were correlated.",
+                evidence={"signal_count_before_bonus": len(triggered_rules) - 1},
+            )
+        )
+
     return (
         triggered_rules,
         suspicious_urls,
@@ -326,8 +579,15 @@ def _find_suspicious_urls(urls: tuple[str, ...]) -> list[SuspiciousUrlRecord]:
         hostname = (parsed.hostname or "").lower()
         scheme = parsed.scheme.lower()
 
-        if scheme != "https":
+        if scheme == "data":
+            reasons.append("uses a data: URI (potential HTML/JS embedding)")
+        elif scheme != "https":
             reasons.append("uses a non-https scheme")
+        if "%00" in url:
+            reasons.append("contains null byte (%00) in URL")
+        pct_encoded_count = url.count("%")
+        if pct_encoded_count > 4:
+            reasons.append(f"high URL-encoding ratio ({pct_encoded_count} encoded sequences)")
         if hostname:
             if _is_ip_literal(hostname):
                 reasons.append("uses an IP-literal host")
@@ -353,20 +613,42 @@ def _find_suspicious_urls(urls: tuple[str, ...]) -> list[SuspiciousUrlRecord]:
     return suspicious_urls
 
 
-def _find_suspicious_attachments(attachments) -> list[dict[str, str | None]]:
-    suspicious: list[dict[str, str | None]] = []
+def _find_suspicious_attachments(attachments) -> list[dict[str, object]]:
+    suspicious: list[dict[str, object]] = []
     for attachment in attachments:
         filename_lower = attachment.filename.lower()
+        entry: dict[str, object] | None = None
         for extension in SUSPICIOUS_ATTACHMENT_EXTENSIONS:
             if filename_lower.endswith(extension):
-                suspicious.append(
-                    {
-                        "filename": attachment.filename,
-                        "content_type": attachment.content_type,
-                        "extension": extension,
-                    }
-                )
+                entry = {
+                    "filename": attachment.filename,
+                    "content_type": attachment.content_type,
+                    "extension": extension,
+                    "mime_mismatch": False,
+                }
                 break
+        if entry is None:
+            # Check for MIME mismatch even on non-suspicious extensions
+            for ext, expected_types in MIME_EXTENSION_EXPECTATIONS.items():
+                if filename_lower.endswith(ext) and attachment.content_type is not None:
+                    ct_base = attachment.content_type.split(";")[0].strip().lower()
+                    if ct_base not in expected_types:
+                        entry = {
+                            "filename": attachment.filename,
+                            "content_type": attachment.content_type,
+                            "extension": ext,
+                            "mime_mismatch": True,
+                        }
+                        break
+        else:
+            # Also check MIME mismatch for suspicious-extension attachments
+            ext = str(entry["extension"])
+            if ext in MIME_EXTENSION_EXPECTATIONS and attachment.content_type is not None:
+                ct_base = attachment.content_type.split(";")[0].strip().lower()
+                if ct_base not in MIME_EXTENSION_EXPECTATIONS[ext]:
+                    entry["mime_mismatch"] = True
+        if entry is not None:
+            suspicious.append(entry)
     return suspicious
 
 
@@ -431,3 +713,20 @@ def _dedupe_preserve_order(values: list[str]) -> list[str]:
         if value not in deduped:
             deduped.append(value)
     return deduped
+
+
+def _compute_correlation_bonus(triggered_rules: list[PhishingTriggeredRule]) -> int:
+    """Return a correlation bonus weight based on how many independent signals fired."""
+    n = len(triggered_rules)
+    if n >= 5:
+        return 4
+    if n >= 3:
+        return 2
+    return 0
+
+
+def _derive_observation_status(*, risk_score: int, triggered_rules: list[PhishingTriggeredRule]) -> ObservationStatus:
+    """Return SUCCEEDED_NO_FINDINGS only when both score and rule list are empty."""
+    if risk_score == 0 and len(triggered_rules) == 0:
+        return ObservationStatus.SUCCEEDED_NO_FINDINGS
+    return ObservationStatus.SUCCEEDED

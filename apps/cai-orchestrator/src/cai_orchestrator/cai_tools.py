@@ -18,11 +18,19 @@ class PlatformApiToolService:
     def health(self) -> dict[str, Any]:
         return self.platform_api_client.health()
 
-    def create_case(self, *, workflow_type: str, title: str, summary: str) -> dict[str, Any]:
+    def create_case(
+        self,
+        *,
+        workflow_type: str,
+        title: str,
+        summary: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         return self.platform_api_client.create_case(
             workflow_type=workflow_type,
             title=title,
             summary=summary,
+            metadata=metadata,
         )
 
     def attach_input_artifact(
@@ -58,6 +66,46 @@ class PlatformApiToolService:
             backend_id=backend_id,
             input_artifact_ids=input_artifact_ids,
             scope=scope,
+        )
+
+    def attach_workspace_s3_zip_reference(
+        self,
+        *,
+        case_id: str,
+        workspace: str,
+        s3_uri: str,
+        upload_prefix: str | None = None,
+        summary: str | None = None,
+        labels: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "source": "workspace_s3_zip",
+            "workspace": workspace,
+            "s3_uri": s3_uri,
+        }
+        if upload_prefix is not None:
+            payload["upload_prefix"] = upload_prefix
+        return self.platform_api_client.attach_input_artifact(
+            case_id=case_id,
+            payload=payload,
+            format="json",
+            summary=summary,
+            labels=labels,
+            metadata=metadata,
+        )
+
+    def execute_watchguard_workspace_zip_ingestion(
+        self,
+        *,
+        run_id: str,
+        requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.platform_api_client.execute_watchguard_workspace_zip_ingestion(
+            run_id=run_id,
+            requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
         )
 
     def execute_watchguard_normalize(
@@ -120,6 +168,19 @@ class PlatformApiToolService:
         input_artifact_id: str | None = None,
     ) -> dict[str, Any]:
         return self.platform_api_client.execute_phishing_email_basic_assessment(
+            run_id=run_id,
+            requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
+        )
+
+    def execute_phishing_email_header_analysis(
+        self,
+        *,
+        run_id: str,
+        requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.platform_api_client.execute_phishing_email_header_analysis(
             run_id=run_id,
             requested_by=requested_by,
             input_artifact_id=input_artifact_id,

@@ -2,6 +2,7 @@
 
 from cai_orchestrator.cai_terminal import (
     build_agent_from_settings,
+    build_egs_analist_agent,
     build_platform_investigation_agent,
     run_cai_terminal,
     run_cai_terminal_session,
@@ -63,6 +64,7 @@ __all__ = [
     "WatchGuardInvestigationRequest",
     "WatchGuardInvestigationResult",
     "build_agent_from_settings",
+    "build_egs_analist_agent",
     "build_cai_watchguard_agent",
     "build_platform_investigation_agent",
     "create_orchestrator_app",

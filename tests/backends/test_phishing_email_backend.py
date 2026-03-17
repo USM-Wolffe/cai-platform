@@ -152,8 +152,8 @@ def test_demo_payload_triggers_expected_rules_and_high_risk_output():
     assert artifact.kind == ArtifactKind.ANALYSIS_OUTPUT
     assert artifact.subtype == "phishing_email.basic_assessment"
     assert artifact.metadata["risk_level"] == "high"
-    assert artifact.metadata["risk_score"] == 12
-    assert artifact.metadata["signal_count"] == 6
+    assert artifact.metadata["risk_score"] == 16  # 12 base + 4 correlation bonus (6 signals >= 5)
+    assert artifact.metadata["signal_count"] == 7  # 6 base + multi_signal_correlation
     assert [rule["rule_id"] for rule in artifact.metadata["triggered_rules"]] == [
         "sender_reply_to_mismatch",
         "trusted_display_name_from_free_mail",
@@ -161,6 +161,7 @@ def test_demo_payload_triggers_expected_rules_and_high_risk_output():
         "credential_or_payment_theme",
         "suspicious_url_patterns",
         "suspicious_attachment_extension",
+        "multi_signal_correlation",
     ]
     assert artifact.metadata["suspicious_urls"][0]["url"] == "http://198.51.100.7/login?verify=1"
     assert artifact.metadata["suspicious_urls"][0]["reasons"] == [
@@ -178,6 +179,7 @@ def test_demo_payload_triggers_expected_rules_and_high_risk_output():
         "credential_or_payment_theme",
         "suspicious_url_patterns",
         "suspicious_attachment_extension",
+        "multi_signal_correlation",
     ]
 
 

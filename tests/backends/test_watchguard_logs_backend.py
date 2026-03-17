@@ -23,6 +23,7 @@ from platform_backends.watchguard_logs import (
     WATCHGUARD_LOGS_BACKEND_ID,
     WATCHGUARD_NORMALIZE_SUMMARY_OPERATION,
     WATCHGUARD_TOP_TALKERS_BASIC_OPERATION,
+    WATCHGUARD_WORKSPACE_ZIP_INGESTION_OPERATION,
     InvalidWatchGuardQueryError,
     execute_guarded_custom_query,
     execute_predefined_observation,
@@ -30,6 +31,7 @@ from platform_backends.watchguard_logs import (
 )
 
 from .support import InMemoryCaseRepository, InMemoryRunRepository, RecordingAuditPort, make_input_artifact
+from tests.apps.support import build_watchguard_workspace_zip_bytes, build_workspace_s3_zip_payload
 
 
 def _make_watchguard_traffic_csv_row(
@@ -90,6 +92,7 @@ def test_backend_descriptor_declares_capabilities_deterministically():
     ]
     assert descriptor.supported_workflow_types == [WorkflowType.LOG_INVESTIGATION]
     assert descriptor.supported_query_classes == [
+        "watchguard_logs.workspace_zip_ingestion",
         "watchguard_logs.normalize_summary",
         "watchguard_logs.filter_denied_events",
         "watchguard_logs.analytics_bundle_basic",
@@ -186,6 +189,97 @@ def test_predefined_observation_produces_normalized_artifact_and_valid_result():
     assert outcome.observation_result.status == ObservationStatus.SUCCEEDED
     assert outcome.observation_result.output_artifact_refs[0].id == outcome.artifacts[0].artifact_id
     assert outcome.observation_result.structured_summary["record_count"] == 1
+
+
+def test_workspace_zip_ingestion_produces_manifest_and_family_artifacts(monkeypatch):
+    case_repository = InMemoryCaseRepository()
+    run_repository = InMemoryRunRepository()
+    audit_port = RecordingAuditPort()
+    backend_registry = StaticBackendRegistry()
+    input_artifact = make_input_artifact()
+
+    case = create_case(
+        case_repository,
+        workflow_type=WorkflowType.LOG_INVESTIGATION,
+        title="Workspace ZIP ingestion case",
+        summary="Case for S3 ZIP ingestion.",
+    )
+    run = create_run_for_case(
+        case_repository,
+        run_repository,
+        backend_registry,
+        audit_port,
+        case_id=case.case_id,
+        backend_id=WATCHGUARD_LOGS_BACKEND_ID,
+    )
+    observation_request = ObservationRequest(
+        case_ref=EntityRef(entity_type=EntityKind.CASE, id=case.case_id),
+        backend_ref=EntityRef(entity_type=EntityKind.BACKEND, id=WATCHGUARD_LOGS_BACKEND_ID),
+        run_ref=EntityRef(entity_type=EntityKind.RUN, id=run.run_id),
+        operation_kind=WATCHGUARD_WORKSPACE_ZIP_INGESTION_OPERATION,
+        input_artifact_refs=[EntityRef(entity_type=EntityKind.ARTIFACT, id=input_artifact.artifact_id)],
+        requested_by="tester",
+    )
+
+    monkeypatch.setattr(
+        "platform_backends.watchguard_logs.execute._download_s3_object",
+        lambda bucket, object_key: build_watchguard_workspace_zip_bytes(
+            traffic_rows=[
+                _make_watchguard_traffic_csv_row(
+                    timestamp="2025-10-22T09:02:37",
+                    action="Allow",
+                    policy="DNS - OUT-00",
+                    protocol="dns/udp",
+                    src_ip="172.26.25.64",
+                    src_port=55738,
+                    dst_ip="8.8.8.8",
+                    dst_port=53,
+                ),
+                _make_watchguard_traffic_csv_row(
+                    timestamp="2025-10-22T09:02:38",
+                    action="Deny",
+                    policy="Unhandled Internal Packet-00",
+                    protocol="28080/tcp",
+                    src_ip="172.26.25.65",
+                    src_port=41864,
+                    dst_ip="47.85.92.246",
+                    dst_port=28080,
+                ),
+            ],
+            event_rows=[
+                "2025-10-23T09:26:52,FWStatus,ev,FW_PL1_CL_PRI,FW_XTM_PRI,loggerd,\\N,10976070,3D01-0003,Archived log file /var/log/traffic.log which reached max size",
+            ],
+            alarm_rows=[
+                "2025-10-22T09:00:03,Notify,al,FW_PL1_CL_PRI,FW_XTM_PRI,firewall,6,\\N,39632546,3000-0155,udp_flood_dos,email,Wed Oct 22 06:00:03 2025 (-03),UDP flood attack against 8.8.8.8 from 172.26.25.56 detected.",
+            ],
+        ),
+    )
+
+    outcome = execute_predefined_observation(
+        run=run,
+        input_artifact=input_artifact,
+        input_payload=build_workspace_s3_zip_payload(
+            workspace="acme-lab",
+            s3_uri="s3://egslatam-cai-dev/workspaces/acme-lab/input/uploads/20260316_abc/logs.zip",
+        ),
+        observation_request=observation_request,
+    )
+
+    assert outcome.observation_result.status == ObservationStatus.SUCCEEDED
+    assert outcome.observation_result.structured_summary["family_counts"]["traffic"]["record_count"] == 2
+    assert outcome.observation_result.structured_summary["family_counts"]["event"]["record_count"] == 1
+    assert outcome.observation_result.structured_summary["family_counts"]["alarm"]["record_count"] == 1
+    assert [artifact.subtype for artifact in outcome.artifacts] == [
+        "watchguard.workspace_zip_manifest",
+        "watchguard.workspace_zip.traffic",
+        "watchguard.workspace_zip.event",
+        "watchguard.workspace_zip.alarm",
+    ]
+    traffic_artifact = next(
+        artifact for artifact in outcome.artifacts if artifact.subtype == "watchguard.workspace_zip.traffic"
+    )
+    assert traffic_artifact.metadata["log_type"] == "traffic"
+    assert traffic_artifact.metadata["record_count"] == 2
 
 
 def test_failure_paths_return_normalized_failure_semantics():

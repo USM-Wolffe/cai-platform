@@ -14,6 +14,7 @@ from .support import (
     QueuedSession,
     build_watchguard_traffic_csv_payload,
     build_watchguard_traffic_csv_row,
+    build_workspace_s3_zip_payload,
 )
 
 
@@ -71,6 +72,7 @@ def test_platform_api_tool_service_calls_expected_endpoints(tmp_path):
             FakeResponse(200, {"observation_result": {"status": "succeeded"}}),
             FakeResponse(200, {"observation_result": {"status": "succeeded"}}),
             FakeResponse(200, {"observation_result": {"status": "succeeded"}}),
+            FakeResponse(200, {"observation_result": {"status": "succeeded"}}),
             FakeResponse(200, {"query_summary": {"record_count": 1}}),
             FakeResponse(200, {"case": {"case_id": "case_123"}}),
             FakeResponse(200, {"run": {"run_id": "run_123"}}),
@@ -104,6 +106,7 @@ def test_platform_api_tool_service_calls_expected_endpoints(tmp_path):
         backend_id="watchguard_logs",
         input_artifact_ids=["artifact_123"],
     )
+    service.execute_watchguard_workspace_zip_ingestion(run_id="run_123", requested_by="cai_terminal")
     service.execute_watchguard_normalize(run_id="run_123", requested_by="cai_terminal")
     service.execute_watchguard_filter_denied(run_id="run_123", requested_by="cai_terminal")
     service.execute_watchguard_analytics_basic(run_id="run_123", requested_by="cai_terminal")
@@ -123,7 +126,11 @@ def test_platform_api_tool_service_calls_expected_endpoints(tmp_path):
 
     assert session.calls == [
         ("GET", "/health", None),
-        ("POST", "/cases", {"workflow_type": "log_investigation", "title": "Case", "summary": "Summary"}),
+        (
+            "POST",
+            "/cases",
+            {"workflow_type": "log_investigation", "title": "Case", "summary": "Summary", "metadata": {}},
+        ),
         (
             "POST",
             "/cases/case_123/artifacts/input",
@@ -158,6 +165,11 @@ def test_platform_api_tool_service_calls_expected_endpoints(tmp_path):
                 "input_artifact_ids": ["artifact_123"],
                 "scope": {},
             },
+        ),
+        (
+            "POST",
+            "/runs/run_123/observations/watchguard-ingest-workspace-zip",
+            {"requested_by": "cai_terminal"},
         ),
         (
             "POST",
@@ -220,14 +232,16 @@ def test_build_platform_investigation_agent_exposes_expected_tool_surface(monkey
         model="gpt-5.4-mini",
     )
 
-    assert agent.name == "platform_investigation_agent"
+    assert agent.name == "egs-analist"
     assert agent.model == "gpt-5.4-mini"
     assert "platform-api" in agent.instructions
     assert [tool.__name__ for tool in agent.tools] == [
         "health",
         "create_case",
         "attach_input_artifact",
+        "attach_workspace_s3_zip_reference",
         "create_run",
+        "execute_watchguard_workspace_zip_ingestion",
         "execute_watchguard_normalize",
         "execute_watchguard_filter_denied",
         "execute_watchguard_analytics_basic",
@@ -246,7 +260,7 @@ def test_build_platform_investigation_agent_exposes_expected_tool_surface(monkey
 def test_run_cai_terminal_cli_one_shot_uses_expected_settings_and_runner(monkeypatch, capsys):
     recorded = _install_fake_cai_sdk(monkeypatch)
     monkeypatch.setenv("PLATFORM_API_BASE_URL", "http://platform-api.local")
-    monkeypatch.setenv("CAI_AGENT_TYPE", "platform_investigation_agent")
+    monkeypatch.setenv("CAI_AGENT_TYPE", "egs-analist")
     monkeypatch.setenv("CAI_MODEL", "gpt-5.4-mini")
 
     exit_code = cai_orchestrator.run_cli(
@@ -262,16 +276,18 @@ def test_run_cai_terminal_cli_one_shot_uses_expected_settings_and_runner(monkeyp
     assert exit_code == 0
     assert recorded["tracing_disabled"] == [True]
     assert recorded["runner_calls"][0]["input"] == "Check the platform health."
-    assert recorded["runner_calls"][0]["agent"].name == "platform_investigation_agent"
+    assert recorded["runner_calls"][0]["agent"].name == "egs-analist"
     assert recorded["runner_calls"][0]["agent"].model == "gpt-5.4-mini"
 
     body = json.loads(stdout)
-    assert body["agent_name"] == "platform_investigation_agent"
+    assert body["agent_name"] == "egs-analist"
     assert body["tool_names"] == [
         "health",
         "create_case",
         "attach_input_artifact",
+        "attach_workspace_s3_zip_reference",
         "create_run",
+        "execute_watchguard_workspace_zip_ingestion",
         "execute_watchguard_normalize",
         "execute_watchguard_filter_denied",
         "execute_watchguard_analytics_basic",
@@ -312,7 +328,7 @@ def test_platform_api_tool_service_can_call_the_phishing_email_endpoint():
 
 def test_run_cai_terminal_cli_reports_missing_cai_dependency(monkeypatch, capsys):
     real_import = builtins.__import__
-    monkeypatch.setenv("CAI_AGENT_TYPE", "platform_investigation_agent")
+    monkeypatch.setenv("CAI_AGENT_TYPE", "egs-analist")
 
     def fake_import(name, globals=None, locals=None, fromlist=(), level=0):  # type: ignore[no-untyped-def]
         if name == "cai.sdk.agents":
@@ -353,6 +369,45 @@ def test_run_cai_terminal_cli_rejects_unsupported_agent_type(monkeypatch, capsys
     assert exit_code == 1
     assert body["error"]["type"] == "invalid_cai_configuration"
     assert "unsupported CAI_AGENT_TYPE" in body["error"]["message"]
+
+
+def test_platform_api_tool_service_can_attach_workspace_s3_zip_reference():
+    session = QueuedSession(
+        responses=[
+            FakeResponse(201, {"artifact": {"artifact_id": "artifact_123"}}),
+        ]
+    )
+    service = cai_orchestrator.PlatformApiToolService(
+        platform_api_client=cai_orchestrator.PlatformApiClient(
+            base_url="http://platform-api.local",
+            session=session,
+        )
+    )
+
+    service.attach_workspace_s3_zip_reference(
+        case_id="case_123",
+        workspace="acme-lab",
+        s3_uri="s3://egslatam-cai-dev/workspaces/acme-lab/input/uploads/20260316_abc/logs.zip",
+        upload_prefix="workspaces/acme-lab/input/uploads/20260316_abc",
+    )
+
+    assert session.calls == [
+        (
+            "POST",
+            "/cases/case_123/artifacts/input",
+            {
+                "format": "json",
+                "payload": build_workspace_s3_zip_payload(
+                    workspace="acme-lab",
+                    s3_uri="s3://egslatam-cai-dev/workspaces/acme-lab/input/uploads/20260316_abc/logs.zip",
+                    upload_prefix="workspaces/acme-lab/input/uploads/20260316_abc",
+                ),
+                "summary": None,
+                "labels": [],
+                "metadata": {},
+            },
+        ),
+    ]
 
 
 def _install_fake_cai_sdk(monkeypatch) -> dict[str, object]:

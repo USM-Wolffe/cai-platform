@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import gzip
+import io
+import tarfile
 from typing import Any
+import zipfile
 
 from fastapi.testclient import TestClient
 
@@ -82,6 +86,59 @@ def build_phishing_email_payload(
         "text": text,
         "attachments": attachments or [],
     }
+
+
+def build_workspace_s3_zip_payload(
+    *,
+    workspace: str,
+    s3_uri: str,
+    upload_prefix: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "source": "workspace_s3_zip",
+        "workspace": workspace,
+        "s3_uri": s3_uri,
+    }
+    if upload_prefix is not None:
+        payload["upload_prefix"] = upload_prefix
+    return payload
+
+
+def build_watchguard_workspace_zip_bytes(
+    *,
+    traffic_rows: list[str] | None = None,
+    event_rows: list[str] | None = None,
+    alarm_rows: list[str] | None = None,
+) -> bytes:
+    traffic_rows = traffic_rows or []
+    event_rows = event_rows or []
+    alarm_rows = alarm_rows or []
+
+    event_tar_bytes = io.BytesIO()
+    with tarfile.open(fileobj=event_tar_bytes, mode="w") as archive:
+        event_payload = "\n".join(event_rows).encode("utf-8")
+        event_info = tarfile.TarInfo(name="event.csv")
+        event_info.size = len(event_payload)
+        archive.addfile(event_info, io.BytesIO(event_payload))
+
+    alarm_payload = "\n".join(alarm_rows).encode("utf-8")
+    alarm_gz_bytes = gzip.compress(alarm_payload)
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, mode="w") as archive:
+        archive.writestr(
+            "watchguard/traffic/2025-10-22/traffic.csv",
+            "\n".join(traffic_rows),
+        )
+        archive.writestr(
+            "watchguard/event/2025-10-23/event.tar",
+            event_tar_bytes.getvalue(),
+        )
+        archive.writestr(
+            "watchguard/alarm/2025-10-22/alarm.txt.gz",
+            alarm_gz_bytes,
+        )
+    return zip_buffer.getvalue()
 
 
 def create_test_client() -> TestClient:

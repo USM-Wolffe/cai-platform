@@ -30,3 +30,15 @@ class NormalizedWatchGuardBatch:
     action_counts: dict[str, int]
     input_shape: str
     log_type: str
+
+
+@dataclass(frozen=True)
+class WatchGuardWorkspaceZipReference:
+    """Stable reference to one workspace ZIP stored in S3."""
+
+    workspace: str
+    s3_uri: str
+    bucket: str
+    object_key: str
+    upload_prefix: str | None = None
+    source_kind: str = "workspace_s3_zip"

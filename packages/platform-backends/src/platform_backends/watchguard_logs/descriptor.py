@@ -13,6 +13,8 @@ from platform_contracts import (
 
 WATCHGUARD_LOGS_BACKEND_ID = "watchguard_logs"
 WATCHGUARD_LOGS_BACKEND_TYPE = "watchguard_logs"
+WATCHGUARD_WORKSPACE_ZIP_INGESTION_QUERY_CLASS = "watchguard_logs.workspace_zip_ingestion"
+WATCHGUARD_WORKSPACE_ZIP_INGESTION_OPERATION = "watchguard_logs.workspace_zip_ingestion"
 WATCHGUARD_ANALYTICS_BUNDLE_BASIC_QUERY_CLASS = "watchguard_logs.analytics_bundle_basic"
 WATCHGUARD_ANALYTICS_BUNDLE_BASIC_OPERATION = "watchguard_logs.analytics_bundle_basic"
 WATCHGUARD_FILTER_DENIED_EVENTS_QUERY_CLASS = "watchguard_logs.filter_denied_events"
@@ -57,6 +59,7 @@ def get_watchguard_logs_backend_descriptor() -> BackendDescriptor:
         ],
         supported_workflow_types=[WorkflowType.LOG_INVESTIGATION],
         supported_query_classes=[
+            WATCHGUARD_WORKSPACE_ZIP_INGESTION_QUERY_CLASS,
             WATCHGUARD_NORMALIZE_SUMMARY_QUERY_CLASS,
             WATCHGUARD_FILTER_DENIED_EVENTS_QUERY_CLASS,
             WATCHGUARD_ANALYTICS_BUNDLE_BASIC_QUERY_CLASS,

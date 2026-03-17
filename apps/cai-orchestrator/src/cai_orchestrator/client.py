@@ -57,7 +57,14 @@ class PlatformApiClient:
     def health(self) -> dict[str, Any]:
         return self._request("GET", "/health")
 
-    def create_case(self, *, workflow_type: str, title: str, summary: str) -> dict[str, Any]:
+    def create_case(
+        self,
+        *,
+        workflow_type: str,
+        title: str,
+        summary: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         return self._request(
             "POST",
             "/cases",
@@ -65,6 +72,7 @@ class PlatformApiClient:
                 "workflow_type": workflow_type,
                 "title": title,
                 "summary": summary,
+                "metadata": metadata or {},
             },
         )
 
@@ -107,6 +115,22 @@ class PlatformApiClient:
                 "input_artifact_ids": input_artifact_ids or [],
                 "scope": scope or {},
             },
+        )
+
+    def execute_watchguard_workspace_zip_ingestion(
+        self,
+        *,
+        run_id: str,
+        requested_by: str,
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"requested_by": requested_by}
+        if input_artifact_id is not None:
+            payload["input_artifact_id"] = input_artifact_id
+        return self._request(
+            "POST",
+            f"/runs/{run_id}/observations/watchguard-ingest-workspace-zip",
+            json=payload,
         )
 
     def execute_watchguard_normalize(
@@ -186,6 +210,22 @@ class PlatformApiClient:
         return self._request(
             "POST",
             f"/runs/{run_id}/observations/phishing-email-basic-assessment",
+            json=payload,
+        )
+
+    def execute_phishing_email_header_analysis(
+        self,
+        *,
+        run_id: str,
+        requested_by: str,
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"requested_by": requested_by}
+        if input_artifact_id is not None:
+            payload["input_artifact_id"] = input_artifact_id
+        return self._request(
+            "POST",
+            f"/runs/{run_id}/observations/phishing-email-header-analysis",
             json=payload,
         )
 
