@@ -29,22 +29,23 @@ Implemented now:
 - `cai_orchestrator.app` including the current thin CLI
 - `cai_orchestrator.config`
 - `cai_orchestrator.cai_tools`
-- `cai_orchestrator.cai_terminal`
+- `cai_orchestrator.cai_terminal` — egs-analist agent + phishing-investigator handoff
+- `cai_orchestrator.phishing_agents` — multi-agent phishing investigator pipeline (triage → specialists → synthesis)
+- `cai_orchestrator.email_bridge` — EML byte parsing to structured platform payload (stdlib only, no cross-layer imports)
 
 Current orchestration surface:
 - validate a tiny WatchGuard-style or phishing-email operator request
 - create case through `platform-api`
 - attach one input artifact through `platform-api`
 - create one run through `platform-api`
-- execute one of four predefined WatchGuard CLI observations (normalize, filter-denied, analytics-basic, top-talkers-basic), one guarded custom query, or the phishing email basic assessment through `platform-api`
+- execute one of four predefined WatchGuard CLI observations (normalize, filter-denied, analytics-basic, top-talkers-basic), one guarded custom query, the phishing email basic assessment, or the phishing header analysis through `platform-api`
+- poll a Gmail/IMAP mailbox for forwarded phishing emails via `run-phishing-monitor`
+- optionally launch the CAI multi-agent phishing investigator after each monitored email (`--cai-investigate`)
 - return the structured result to the caller
 
 Note: the fifth WatchGuard observation (`watchguard-ingest-workspace-zip`) is available as a CAI terminal tool (`execute_watchguard_workspace_zip_ingestion`) but is not exposed as a standalone CLI subcommand. Use `run-cai-terminal` to drive workspace ZIP ingestion flows interactively.
 
 Still intentionally absent:
-- specialist meshes
-- handoff networks
-- prompt libraries
 - canonical state inside the orchestrator
 - backend logic
 - containerized runtime/deployment scaffolding
@@ -75,6 +76,12 @@ Runtime:
   `python3 -m cai_orchestrator run-watchguard-guarded-query --title "Guarded query case" --summary "Drive the guarded custom query slice" --payload-file path/to/payload.json --query-file examples/watchguard/guarded_query_src_ip.json --reason "Investigate one source IP." --approval-reason "Human approved this narrow guarded query."`
 - Run the phishing email basic assessment slice locally:
   `python3 -m cai_orchestrator run-phishing-email-basic-assessment --title "Phishing email case" --summary "Drive the phishing email basic assessment slice" --payload-file path/to/payload.json`
+- Run the IMAP phishing monitor (one email, dry-run):
+  `python3 -m cai_orchestrator run-phishing-monitor --once --dry-run`
+- Run the IMAP phishing monitor with full CAI investigator:
+  `python3 -m cai_orchestrator run-phishing-monitor --once --cai-investigate --model "bedrock/anthropic.claude-sonnet-4-6"`
+- Run the IMAP phishing monitor continuously (default 60 s interval):
+  `python3 -m cai_orchestrator run-phishing-monitor`
 - Read run status locally:
   `python3 -m cai_orchestrator get-run-status --run-id <run_id>`
 - List run artifacts locally:
@@ -116,7 +123,9 @@ Runtime:
   `python3 -m cai_orchestrator run-cai-terminal --prompt "Check health, create a case, attach examples/watchguard/minimal_payload.json, create a run, execute watchguard_logs.analytics_bundle_basic, then execute a guarded filtered query for src_ip 10.0.0.1 with human approval, then show the final run."`
   or
   `python3 -m cai_orchestrator run-cai-terminal --prompt "Check health, create a defensive_analysis case, attach examples/phishing/minimal_payload.json, create a run for phishing_email, execute phishing_email.basic_assessment, then show the final run."`
-- The CAI terminal tool surface includes: `health`, `create_case`, `attach_input_artifact`, `attach_workspace_s3_zip_reference`, `create_run`, `execute_watchguard_workspace_zip_ingestion`, `execute_watchguard_normalize`, `execute_watchguard_filter_denied`, `execute_watchguard_analytics_basic`, `execute_watchguard_top_talkers_basic`, `execute_phishing_email_basic_assessment`, `execute_watchguard_guarded_custom_query`, `get_case`, `get_run`, `get_run_status`, `list_run_artifacts`, `read_artifact_content`. Each tool carries a docstring that the LLM uses to reason about when and how to call it.
+- The CAI terminal tool surface (egs-analist) includes: `health`, `create_case`, `attach_input_artifact`, `attach_workspace_s3_zip_reference`, `create_run`, `execute_watchguard_workspace_zip_ingestion`, `execute_watchguard_normalize`, `execute_watchguard_filter_denied`, `execute_watchguard_analytics_basic`, `execute_watchguard_top_talkers_basic`, `execute_phishing_email_basic_assessment`, `execute_watchguard_guarded_custom_query`, `get_case`, `get_run`, `get_run_status`, `list_run_artifacts`, `read_artifact_content`. Each tool carries a docstring that the LLM uses to reason about when and how to call it.
+- egs-analist also supports handing off to the phishing-investigator pipeline. Tell it "investigate this phishing email" with a run_id and it delegates automatically.
+- Supported `CAI_AGENT_TYPE` values: `egs-analist` (default), `platform_investigation_agent` (alias), `phishing_investigator_agent` (direct phishing pipeline entry).
 - Only `make demo-watchguard` and `make demo-phishing-email` exist as Makefile shorthands. The rest of the runtime surface stays explicit through the CLI commands above.
 - CAI is optional for this app. The baseline WatchGuard and phishing CLI flows do not require the CAI extra.
 - AWS CLI and MCP are not required for the current local stack.

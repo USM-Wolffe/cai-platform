@@ -16,6 +16,20 @@ from cai_orchestrator.config import (
 from cai_orchestrator.errors import MissingCaiDependencyError
 
 
+def _resolve_model(model: str | None) -> Any:
+    """Return an OpenAIChatCompletionsModel instance for LiteLLM models (e.g. bedrock/...).
+    Returns the plain string for standard OpenAI model names so CAI handles them normally."""
+    if model and "/" in model:
+        try:
+            import openai
+            from cai.sdk.agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
+            client = openai.AsyncOpenAI(api_key="dummy")
+            return OpenAIChatCompletionsModel(model=model, openai_client=client)
+        except ImportError:
+            pass
+    return model
+
+
 def build_egs_analist_agent(
     *,
     platform_api_base_url: str,
@@ -244,16 +258,32 @@ def build_egs_analist_agent(
         """Read the stored content of an artifact. Use this to inspect the actual output of an observation (normalized records, analytics, filtered rows, etc.)."""
         return service.read_artifact_content(artifact_id=artifact_id)
 
+    # Build the phishing investigator pipeline so egs-analist can hand off to it
+    from cai_orchestrator.phishing_agents import build_phishing_investigator_agent
+    phishing_triage = build_phishing_investigator_agent(
+        platform_api_base_url=platform_api_base_url,
+        session=session,
+        model=model,
+    )
+
     return Agent(
         name="egs-analist",
         description="Thin CAI-facing investigation agent over the deterministic platform-api boundary.",
         instructions=(
             "You operate only through platform-api tools. Do not assume direct backend access, "
-            "local backend state, or any legacy local service topology. "
-            "Use attach_workspace_s3_zip_reference for workspace ZIPs stored in S3, "
-            "then execute_watchguard_workspace_zip_ingestion to materialize deterministic artifacts. "
-            "When the operator provides a local payload path, use attach_input_artifact with that path. "
-            "Use list_run_artifacts, read_artifact_content, get_case, and get_run to inspect deterministic state after actions."
+            "local backend state, or any legacy local service topology.\n\n"
+            "## WatchGuard log investigation\n"
+            "Use attach_input_artifact (for local files) or attach_workspace_s3_zip_reference (for S3 ZIPs), "
+            "then create_run with backend_id='watchguard_logs', then execute the appropriate observation.\n\n"
+            "## Phishing email investigation\n"
+            "When the operator asks to investigate a phishing or suspicious email, follow EXACTLY these steps:\n"
+            "1. create_case — MUST use workflow_type='defensive_analysis' (not 'phishing_assessment' or any other value)\n"
+            "2. attach_input_artifact with the payload path (JSON file)\n"
+            "3. create_run — MUST use backend_id='phishing_email'\n"
+            "4. Hand off to phishing-triage with the message: 'Investigate run_id=<run_id>, input_artifact_id=<artifact_id>.'\n"
+            "Do NOT call execute_phishing_email_basic_assessment yourself — phishing-triage handles that.\n"
+            "The phishing-triage agent will run the full multi-agent pipeline automatically.\n\n"
+            "Use list_run_artifacts, read_artifact_content, get_case, and get_run to inspect state after actions."
         ),
         tools=[
             health,
@@ -274,7 +304,8 @@ def build_egs_analist_agent(
             list_run_artifacts,
             read_artifact_content,
         ],
-        model=model,
+        handoffs=[phishing_triage],
+        model=_resolve_model(model),
     )
 
 

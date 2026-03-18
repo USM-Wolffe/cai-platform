@@ -127,6 +127,8 @@ MIME_EXTENSION_EXPECTATIONS: dict[str, set[str]] = {
     ".txt": {"text/plain"},
 }
 SUSPICIOUS_URL_SHORTENERS = {"bit.ly", "tinyurl.com", "t.co"}
+# These schemes are legitimate non-web references used inside MIME emails; do not flag them.
+BENIGN_URL_SCHEMES = {"cid", "mailto", "tel", "sms", "fax", "callto"}
 SUSPICIOUS_URL_TERMS = ("login", "verify", "reset", "update", "invoice", "payment")
 SUSPICIOUS_ATTACHMENT_EXTENSIONS = (
     ".html",
@@ -578,6 +580,10 @@ def _find_suspicious_urls(urls: tuple[str, ...]) -> list[SuspiciousUrlRecord]:
         parsed = urlsplit(url)
         hostname = (parsed.hostname or "").lower()
         scheme = parsed.scheme.lower()
+
+        # Skip legitimate MIME-internal and non-web schemes (embedded images, mailto links, etc.)
+        if scheme in BENIGN_URL_SCHEMES:
+            continue
 
         if scheme == "data":
             reasons.append("uses a data: URI (potential HTML/JS embedding)")

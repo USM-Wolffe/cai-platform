@@ -29,8 +29,9 @@ CAI is an external dependency in this repo. It is not vendored source here and s
   - `watchguard_logs.filter_denied_events`
   - `watchguard_logs.analytics_bundle_basic`
   - `watchguard_logs.top_talkers_basic`
-- The `phishing_email` backend now exposes one predefined observation:
+- The `phishing_email` backend now exposes two predefined observations:
   - `phishing_email.basic_assessment`
+  - `phishing_email.header_analysis`
 - The backend now also exposes one guarded custom query path:
   - `watchguard_logs.guarded_filtered_rows`
 - `apps/platform-api` exposes the current deterministic HTTP surface.
@@ -132,8 +133,10 @@ Useful env names carried forward for operator ergonomics:
 - `CAI_AGENT_TYPE`
 - `CAI_MODEL`
 
-Supported agent type in v2:
-- `platform_investigation_agent`
+Supported agent types:
+- `egs-analist` — general investigation agent with phishing-investigator as a handoff target (default)
+- `platform_investigation_agent` — accepted alias for `egs-analist`
+- `phishing_investigator_agent` — launches the phishing multi-agent pipeline directly for a known run
 
 Optional CAI smoke path:
 
@@ -149,6 +152,44 @@ python3 -m cai_orchestrator run-cai-terminal --prompt \
 Note:
 - `.env.example` is a minimal compatibility reference, not an auto-loaded dotenv file in this pass.
 - You can also skip exporting env vars and pass `--api-base-url` directly to `run-cai-terminal`.
+
+## Phishing Email IMAP Monitor
+The IMAP monitor polls a Gmail (or any IMAP) mailbox for forwarded phishing emails, extracts the raw `.eml` attachment, and drives the full deterministic pipeline automatically.
+
+Prerequisites:
+- A running `platform-api`
+- IMAP credentials in `.env` (see `.env.example`)
+
+```bash
+# Dry-run: process one unseen email without marking it read
+python3 -m cai_orchestrator run-phishing-monitor --once --dry-run
+
+# Process one email and run the full CAI multi-agent phishing investigator afterwards
+python3 -m cai_orchestrator run-phishing-monitor --once --cai-investigate \
+  --model "bedrock/anthropic.claude-sonnet-4-6"
+
+# Continuous polling loop (default interval: 60 s)
+python3 -m cai_orchestrator run-phishing-monitor
+```
+
+## Phishing Multi-Agent Investigator Pipeline
+When launched (via `--cai-investigate`, via egs-analist handoff, or directly as `phishing_investigator_agent`), the pipeline follows this topology:
+
+```
+phishing-triage
+  ├─ execute_phishing_email_basic_assessment
+  ├─ read_artifact_content (triage reads risk signals)
+  └─ handoff to one specialist:
+       phishing-url-specialist    → phishing-synthesis
+       phishing-header-specialist → phishing-synthesis
+       phishing-attachment-specialist → phishing-synthesis
+       (no signals)               → phishing-synthesis (direct)
+
+phishing-synthesis (terminal node)
+  └─ structured JSON verdict
+```
+
+Synthesis output fields: `overall_verdict`, `risk_level`, `confidence`, `triggered_rules`, `authentication_summary`, `url_summary`, `attachment_summary`, `recommended_action`, `evidence_summary`.
 
 ## Full Contributor Install
 If you are contributing to the repo itself rather than only bootstrapping the current stack:

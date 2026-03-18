@@ -254,7 +254,9 @@ def test_build_platform_investigation_agent_exposes_expected_tool_surface(monkey
         "list_run_artifacts",
         "read_artifact_content",
     ]
-    assert recorded["agents"] == [agent]
+    # egs-analist plus the phishing-investigator sub-agents (triage, specialists, synthesis)
+    assert agent in recorded["agents"]
+    assert agent.name == "egs-analist"
 
 
 def test_run_cai_terminal_cli_one_shot_uses_expected_settings_and_runner(monkeypatch, capsys):
@@ -426,8 +428,13 @@ def _install_fake_cai_sdk(monkeypatch) -> dict[str, object]:
                 setattr(self, key, value)
             recorded["agents"].append(self)
 
-    def function_tool(func):
-        return func
+    def function_tool(func=None, **kwargs):
+        # Supports both @function_tool and @function_tool(strict_mode=False)
+        if func is not None:
+            return func
+        def decorator(f):
+            return f
+        return decorator
 
     class FakeResult:
         def __init__(self, *, final_output):
@@ -451,10 +458,14 @@ def _install_fake_cai_sdk(monkeypatch) -> dict[str, object]:
     def set_tracing_disabled(value):
         recorded["tracing_disabled"].append(value)
 
+    def set_default_openai_api(value):
+        pass  # no-op in tests
+
     agents_module.Agent = FakeAgent
     agents_module.Runner = Runner
     agents_module.function_tool = function_tool
     agents_module.set_tracing_disabled = set_tracing_disabled
+    agents_module.set_default_openai_api = set_default_openai_api
     sdk_module.agents = agents_module
     cai_module.sdk = sdk_module
 

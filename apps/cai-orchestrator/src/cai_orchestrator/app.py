@@ -429,6 +429,8 @@ def _run_phishing_monitor_command(args: argparse.Namespace) -> int:
     title_prefix = args.title_prefix or "Phishing email"
     once = args.once
     dry_run = args.dry_run
+    cai_investigate = getattr(args, "cai_investigate", False)
+    cai_model = getattr(args, "model", None)
 
     def _process_once() -> int:
         try:
@@ -466,9 +468,32 @@ def _run_phishing_monitor_command(args: argparse.Namespace) -> int:
                     )
                 finally:
                     orchestrator.close()
-                results.append({"status": "processed", "index": i, **result.to_dict()})
+                entry: dict = {"status": "processed", "index": i, **result.to_dict()}
+                results.append(entry)
             except Exception as exc:
                 results.append({"status": "error", "index": i, "message": str(exc)})
+                continue
+
+            # Launch CAI multi-agent investigator if requested
+            if cai_investigate:
+                run_id = result.run.get("run_id", "")
+                artifact_id = result.input_artifact.get("artifact_id", "")
+                if run_id and artifact_id:
+                    print(json.dumps({"status": "launching_cai_investigator", "run_id": run_id, "artifact_id": artifact_id}, indent=2))
+                    try:
+                        from dataclasses import replace as dc_replace
+                        from cai_orchestrator.cai_terminal import PHISHING_INVESTIGATOR_AGENT_TYPE, run_cai_terminal
+                        cai_settings = load_cai_integration_settings()
+                        cai_settings = dc_replace(
+                            cai_settings,
+                            platform_api_base_url=api_base_url,
+                            cai_agent_type=PHISHING_INVESTIGATOR_AGENT_TYPE,
+                            cai_model=cai_model or cai_settings.cai_model,
+                        )
+                        prompt = f"Investigate run_id={run_id}, input_artifact_id={artifact_id}."
+                        run_cai_terminal(settings=cai_settings, prompt=prompt)
+                    except Exception as exc:
+                        results[-1]["cai_investigation_error"] = str(exc)
 
         print(json.dumps({"processed": len(results), "results": results}, indent=2, sort_keys=True))
         return 0
@@ -538,6 +563,17 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Parse emails and print payloads without submitting to platform-api.",
+    )
+    phishing_monitor.add_argument(
+        "--cai-investigate",
+        action="store_true",
+        default=False,
+        help="After processing each email, launch the CAI multi-agent phishing investigator automatically. Requires the cai extra.",
+    )
+    phishing_monitor.add_argument(
+        "--model",
+        default=None,
+        help="Override the CAI model for investigation (e.g. bedrock/...). Defaults to CAI_MODEL env var.",
     )
     phishing_investigate = subparsers.add_parser(
         "run-phishing-investigate",
