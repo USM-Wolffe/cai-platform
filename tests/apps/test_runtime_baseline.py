@@ -99,6 +99,8 @@ def test_orchestrator_cli_runs_the_first_flow(tmp_path, monkeypatch, capsys):
     exit_code = cai_orchestrator.run_cli(
         [
             "run-watchguard",
+            "--client-id",
+            "test-client",
             "--title",
             "CLI case",
             "--summary",
@@ -158,6 +160,8 @@ def test_orchestrator_cli_runs_the_denied_filter_flow(tmp_path, monkeypatch, cap
     exit_code = cai_orchestrator.run_cli(
         [
             "run-watchguard-filter-denied",
+            "--client-id",
+            "test-client",
             "--title",
             "CLI case",
             "--summary",
@@ -217,6 +221,8 @@ def test_orchestrator_cli_runs_the_basic_analytics_flow(tmp_path, monkeypatch, c
     exit_code = cai_orchestrator.run_cli(
         [
             "run-watchguard-analytics-basic",
+            "--client-id",
+            "test-client",
             "--title",
             "CLI case",
             "--summary",
@@ -276,6 +282,8 @@ def test_orchestrator_cli_runs_the_top_talkers_flow(tmp_path, monkeypatch, capsy
     exit_code = cai_orchestrator.run_cli(
         [
             "run-watchguard-top-talkers-basic",
+            "--client-id",
+            "test-client",
             "--title",
             "CLI case",
             "--summary",
@@ -345,6 +353,8 @@ def test_orchestrator_cli_runs_the_guarded_query_flow(tmp_path, monkeypatch, cap
     exit_code = cai_orchestrator.run_cli(
         [
             "run-watchguard-guarded-query",
+            "--client-id",
+            "test-client",
             "--title",
             "CLI case",
             "--summary",
@@ -449,6 +459,7 @@ def test_demo_watchguard_payload_is_valid_for_top_talkers_flow():
     try:
         result = app.start_watchguard_top_talkers_basic_investigation(
             cai_orchestrator.WatchGuardInvestigationRequest(
+                client_id="test-client",
                 title="Top talkers demo payload case",
                 summary="Validate the checked-in demo payload for top talkers.",
                 payload=payload,
@@ -470,6 +481,8 @@ def test_orchestrator_cli_reports_invalid_json_payload(tmp_path, capsys):
     exit_code = cai_orchestrator.run_cli(
         [
             "run-watchguard",
+            "--client-id",
+            "test-client",
             "--title",
             "CLI case",
             "--summary",
@@ -525,6 +538,8 @@ def test_orchestrator_cli_reports_flow_failure(tmp_path, monkeypatch, capsys):
     exit_code = cai_orchestrator.run_cli(
         [
             "run-watchguard",
+            "--client-id",
+            "test-client",
             "--title",
             "CLI case",
             "--summary",
@@ -617,6 +632,7 @@ def test_demo_watchguard_payload_is_valid_for_the_current_flow():
     try:
         result = app.start_watchguard_log_investigation(
             cai_orchestrator.WatchGuardInvestigationRequest(
+                client_id="test-client",
                 title="Demo payload case",
                 summary="Validate the checked-in demo payload.",
                 payload=payload,
@@ -642,6 +658,7 @@ def test_demo_watchguard_payload_is_valid_for_denied_filter_flow():
     try:
         result = app.start_watchguard_denied_events_investigation(
             cai_orchestrator.WatchGuardInvestigationRequest(
+                client_id="test-client",
                 title="Denied demo payload case",
                 summary="Validate the checked-in demo payload for denied filtering.",
                 payload=payload,
@@ -668,6 +685,7 @@ def test_demo_watchguard_payload_is_valid_for_basic_analytics_flow():
     try:
         result = app.start_watchguard_analytics_bundle_investigation(
             cai_orchestrator.WatchGuardInvestigationRequest(
+                client_id="test-client",
                 title="Analytics demo payload case",
                 summary="Validate the checked-in demo payload for analytics.",
                 payload=payload,

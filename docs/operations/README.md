@@ -1,116 +1,260 @@
-# Operations Docs
+# Guía Operacional — cai-platform
 
-Purpose:
-- Hold local development notes, operational runbooks, and future environment guidance.
+Referencia práctica para operadores y desarrolladores. Comandos de administración, bootstrapping, smoke tests, y gestión de la infraestructura AWS.
 
-Owns:
-- Practical operating guidance for humans and coding agents.
+---
 
-Must not own:
-- Canonical architecture rules that belong in contracts or ADRs.
+## Modelo de runtime
 
-Relation:
-- This folder stays empty of deployment code for now by design.
+| Componente | Cómo corre |
+|---|---|
+| `platform-api` | ECS Fargate (producción) / Docker Compose (local) |
+| `cai-orchestrator` | Host-run como CLI. No está containerizado. |
+| `packages/*` | Librerías instalables. No son servicios. |
+| PostgreSQL | RDS `cai-platform-db` (producción) / in-memory (local/tests) |
 
-## Current Runtime Model
-- `apps/platform-api` is the only compose-managed and containerized app in the repo today.
-- The root `compose.yml` and `apps/platform-api/Dockerfile` intentionally cover only `platform-api`.
-- `apps/cai-orchestrator` is intentionally host-run as a CLI/app that calls `platform-api`.
-- `packages/platform-contracts`, `packages/platform-core`, `packages/platform-adapters`, and `packages/platform-backends` are libraries, not services.
-- The current API runtime registers multiple deterministic backends in process: `watchguard_logs` and `phishing_email`.
+---
 
-## Required Prerequisites
-- `git`
-- Python `3.12+`
-- `python3 -m pip`
-- a venv-friendly Python install
-- Docker Engine
-- Docker Compose plugin via `docker compose`
-
-Quick verification:
-```bash
-git --version
-python3 --version
-python3 -m pip --version
-docker --version
-docker compose version
-```
-
-## Optional Prerequisites
-- CAI support via `python3 -m pip install -e 'apps/cai-orchestrator[cai]'` only if you want `run-cai-terminal`
-- AWS CLI only for AWS-side work outside the current local stack
-- MCP is not needed for the current stack
-
-## Fresh Linux/EC2 Bootstrap
-Canonical minimal bootstrap for the official runtime model:
+## Bootstrap en host nuevo (EC2 / Linux)
 
 ```bash
-git clone <your-repo-url> cai-platform-v2
-cd cai-platform-v2
+git clone <repo-url> cai-platform
+cd cai-platform
 
 python3 -m venv .venv
 . .venv/bin/activate
-python3 -m pip install --upgrade pip
-python3 -m pip install -e apps/cai-orchestrator
+pip install --upgrade pip
+
+# CLI del orquestador (mínimo para smoke tests)
+pip install -e apps/cai-orchestrator
+
+# Con soporte CAI (para run-cai-terminal)
+pip install -e 'apps/cai-orchestrator[cai]'
+
+# Instalar todo (para contribuidores)
+make install-dev
 ```
 
-Optional CAI support:
+---
 
-```bash
-python3 -m pip install -e 'apps/cai-orchestrator[cai]'
-```
-
-Notes:
-- You do not need AWS CLI, MCP, or a CAI install for the baseline WatchGuard and phishing CLI smoke tests.
-- You do not need to install `platform-api` into the host Python environment for the official current runtime model; the API is containerized.
-- `make install-dev` remains the full contributor install, not the minimum bootstrap for a fresh host.
-
-## Smoke Test
-Copy-pasteable current smoke test:
+## Smoke test local
 
 ```bash
 . .venv/bin/activate
+set -a && . .env && set +a
 
-make build
-make up
-make health
+make build   # construye imagen Docker del API
+make up      # levanta API en http://localhost:8000
+make health  # GET /health → debe retornar {"status": "ok"}
 
 python3 -m cai_orchestrator run-watchguard \
-  --title "WatchGuard smoke case" \
-  --summary "Run the baseline WatchGuard smoke test." \
+  --client-id "test-client" \
+  --title "WatchGuard smoke" \
+  --summary "Baseline smoke test." \
   --payload-file examples/watchguard/minimal_payload.json
 
 python3 -m cai_orchestrator run-phishing-email-basic-assessment \
-  --title "Phishing smoke case" \
-  --summary "Run the phishing email smoke test." \
+  --client-id "test-client" \
+  --title "Phishing smoke" \
+  --summary "Phishing baseline test." \
   --payload-file examples/phishing/minimal_payload.json
 ```
 
-Optional CAI terminal smoke path:
+Atajos Makefile (requieren orquestador instalado):
+```bash
+make demo-watchguard      # run-watchguard con payload de ejemplo
+make demo-phishing-email  # phishing assessment con payload de ejemplo
+```
+
+---
+
+## Smoke test contra producción (ALB)
 
 ```bash
 . .venv/bin/activate
-set -a && . ./.env.example && set +a
+set -a && . .env && set +a
+# PLATFORM_API_BASE_URL debe apuntar al ALB
 
-python3 -m cai_orchestrator run-cai-terminal --prompt \
-  "Check health, create a defensive_analysis case, attach examples/phishing/minimal_payload.json, create a run for phishing_email, execute phishing_email.basic_assessment, then show the final run."
+make health   # GET contra el ALB
+
+python3 -m cai_orchestrator run-watchguard \
+  --client-id "egs-prod" \
+  --title "Smoke prod" \
+  --summary "Verificar producción." \
+  --payload-file examples/watchguard/minimal_payload.json
 ```
 
-Shorthands and notes:
-- `make demo-watchguard` and `make demo-phishing-email` are convenience shorthands for the same host-run orchestrator pattern.
-- Those targets still require `apps/cai-orchestrator` to be installed in the active Python environment first.
-- `make api-dev` exists for contributor-focused local API work, but the official current operating model keeps `platform-api` on Docker/Compose.
+---
 
-## Environment Note
-- `.env.example` is a small reference file for the current runtime surface.
-- Commands do not auto-load `.env.example`; export values in your shell if you want them applied.
-- `PLATFORM_API_BASE_URL` points the host-run orchestrator or CAI terminal at the current API boundary.
+## Deploy en AWS
 
-## Intentionally Absent
-- No orchestrator service container
-- No backend-specific service containers
-- No database, queue, or object-store runtime
-- No AWS CLI requirement for the local stack
-- No MCP requirement for the local stack
-- No CAI requirement unless you explicitly want the CAI terminal path
-- No recreated `collector`, `analyzer`, or `data-runner` service topology
+### Build y push de imagen
+
+```bash
+make ecr-push    # build + tag + push al ECR (cai-platform-api)
+```
+
+### Forzar nuevo deployment en ECS
+
+```bash
+make ecs-deploy  # fuerza nuevo deployment del servicio ECS
+make health      # verifica que el servicio levantó
+```
+
+### Verificar logs del servicio
+
+```bash
+aws logs tail /ecs/cai-platform-api --follow --region us-east-2
+```
+
+### Ver tareas ECS activas
+
+```bash
+aws ecs list-tasks --cluster cai-platform-cluster --region us-east-2
+aws ecs describe-tasks \
+  --cluster cai-platform-cluster \
+  --tasks <task-arn> \
+  --region us-east-2
+```
+
+---
+
+## Recursos AWS
+
+| Recurso | Identificador |
+|---|---|
+| ALB | `cai-platform-alb` — `cai-platform-alb-472989822.us-east-2.elb.amazonaws.com` |
+| ECS Cluster | `cai-platform-cluster` |
+| ECS Service | `cai-platform-service` |
+| ECR Repository | `cai-platform-api` |
+| RDS (PostgreSQL 16) | `cai-platform-db.c9ow4kqay2rx.us-east-2.rds.amazonaws.com` |
+| DB Name / User | `caiplatform` / `caiplatform` |
+| Secrets Manager | `cai-platform/db-credentials` |
+| S3 Bucket | `egslatam-cai-dev` |
+| CloudWatch Logs | `/ecs/cai-platform-api` |
+| Región | `us-east-2` |
+
+---
+
+## Pipeline WatchGuard S3 (logs masivos)
+
+Para ZIPs de SharePoint con millones de filas. No carga en RAM — usa DuckDB httpfs sobre S3.
+
+### Paso 1: Subir ZIP a S3
+
+```bash
+make upload-workspace ZIP=<archivo>.zip WORKSPACE=<workspace_id>
+# Ejemplo:
+make upload-workspace ZIP=8011029C760FA.zip WORKSPACE=8011029C760FA
+```
+
+Destino: `s3://egslatam-cai-dev/workspaces/{WORKSPACE}/input/uploads/{timestamp}/raw.zip`
+
+### Paso 2: Investigación vía CAI
+
+```bash
+. .venv/bin/activate
+set -a && . .env && set +a
+
+python3 -m cai_orchestrator run-cai-terminal \
+  --client-id "cliente-abc" \
+  --model "bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0" \
+  --prompt "Analiza el workspace 8011029C760FA. Encuentra el ZIP más reciente, crea el caso, estágealo, corre analytics y dime los top IPs con más denials."
+```
+
+El agente ejecuta automáticamente:
+1. `find_latest_workspace_upload` → s3_uri
+2. `attach_workspace_s3_zip_reference` + `create_run`
+3. `execute_watchguard_stage_workspace_zip` → extrae CSVs a S3 staging
+4. `execute_watchguard_duckdb_workspace_analytics` → agregaciones DuckDB
+5. `execute_watchguard_duckdb_workspace_query` → drill-down por IP / alarma / acción
+
+### Variables de entorno requeridas para S3
+
+| Variable | Default | Descripción |
+|---|---|---|
+| `AWS_ACCESS_KEY_ID` | — | Credencial S3/Bedrock |
+| `AWS_SECRET_ACCESS_KEY` | — | Credencial S3/Bedrock |
+| `AWS_DEFAULT_REGION` | `us-east-2` | Región |
+| `WATCHGUARD_S3_BUCKET` | `egslatam-cai-dev` | Bucket S3 |
+
+---
+
+## Monitor IMAP de phishing
+
+```bash
+# Configurar en .env:
+# IMAP_HOST=imap.gmail.com
+# IMAP_PORT=993
+# IMAP_USERNAME=buzón@empresa.com
+# IMAP_PASSWORD=app-password-de-gmail
+
+# Dry-run: procesar un email sin marcarlo como leído
+python3 -m cai_orchestrator run-phishing-monitor \
+  --client-id "cliente-abc" --once --dry-run
+
+# Procesar + investigar con CAI
+python3 -m cai_orchestrator run-phishing-monitor \
+  --client-id "cliente-abc" --once --cai-investigate \
+  --model "bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0"
+
+# Loop continuo
+python3 -m cai_orchestrator run-phishing-monitor --client-id "cliente-abc"
+```
+
+Para Gmail: activar verificación en dos pasos → generar app password en myaccount.google.com/apppasswords.
+
+---
+
+## Base de datos
+
+El API usa PostgreSQL automáticamente si `DATABASE_URL` está definida. Las tablas se crean automáticamente al iniciar (`apply_schema()` es idempotente).
+
+### Conexión directa al RDS (desde EC2 en la VPC)
+
+```bash
+# Las credenciales están en Secrets Manager:
+aws secretsmanager get-secret-value \
+  --secret-id cai-platform/db-credentials \
+  --region us-east-2 \
+  --query SecretString --output text
+
+psql -h cai-platform-db.c9ow4kqay2rx.us-east-2.rds.amazonaws.com \
+     -U caiplatform -d caiplatform
+```
+
+### Consultas útiles
+
+```sql
+-- Ver todos los casos de un cliente
+SELECT case_id, data->>'title', data->>'workflow_type', created_at
+FROM cases WHERE client_id = 'cliente-abc' ORDER BY created_at DESC LIMIT 20;
+
+-- Ver runs de un caso
+SELECT run_id, data->>'status', data->>'backend_ref', updated_at
+FROM runs WHERE case_id = '<case_id>';
+
+-- Contar por cliente
+SELECT client_id, COUNT(*) FROM cases GROUP BY client_id;
+```
+
+---
+
+## Comandos Makefile completos
+
+```bash
+make install-dev     # instalar todos los paquetes en modo editable (contribuidores)
+make test            # correr tests completos
+make test-fast       # tests rápidos (sin marcadores slow)
+make lint            # ruff + mypy
+make build           # build imagen Docker del API
+make up              # levantar API local (docker compose up)
+make down            # bajar contenedores
+make health          # GET /health contra PLATFORM_API_BASE_URL
+make api-dev         # uvicorn con hot-reload (sin Docker)
+make ecr-push        # build + push imagen al ECR
+make ecs-deploy      # forzar nuevo deployment ECS
+make demo-watchguard      # smoke test WatchGuard
+make demo-phishing-email  # smoke test phishing
+make upload-workspace ZIP=... WORKSPACE=...  # subir ZIP WatchGuard a S3
+```

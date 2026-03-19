@@ -11,7 +11,8 @@ def _create_watchguard_case_run(client, payload):
     case_id = client.post(
         "/cases",
         json={
-            "workflow_type": "log_investigation",
+            "client_id": "test-client",
+                "workflow_type": "log_investigation",
             "title": "WatchGuard query case",
             "summary": "Case for guarded custom query execution.",
         },
@@ -52,7 +53,8 @@ def test_case_creation_works():
     response = client.post(
         "/cases",
         json={
-            "workflow_type": "log_investigation",
+            "client_id": "test-client",
+                "workflow_type": "log_investigation",
             "title": "API-created case",
             "summary": "Case created through the API.",
         },
@@ -69,7 +71,8 @@ def test_input_artifact_attachment_works():
     case_id = client.post(
         "/cases",
         json={
-            "workflow_type": "log_investigation",
+            "client_id": "test-client",
+                "workflow_type": "log_investigation",
             "title": "Attach case",
             "summary": "Case for artifact attachment.",
         },
@@ -109,7 +112,8 @@ def test_workspace_zip_reference_attachment_enriches_artifact_metadata():
     case_id = client.post(
         "/cases",
         json={
-            "workflow_type": "log_investigation",
+            "client_id": "test-client",
+                "workflow_type": "log_investigation",
             "title": "Workspace ZIP attach case",
             "summary": "Case for S3 ZIP attachment.",
         },
@@ -139,7 +143,8 @@ def test_run_creation_works_for_supported_backend():
     case_id = client.post(
         "/cases",
         json={
-            "workflow_type": "log_investigation",
+            "client_id": "test-client",
+                "workflow_type": "log_investigation",
             "title": "Run case",
             "summary": "Case for run creation.",
         },
@@ -186,7 +191,8 @@ def test_unsupported_backend_fails_clearly():
     case_id = client.post(
         "/cases",
         json={
-            "workflow_type": "log_investigation",
+            "client_id": "test-client",
+                "workflow_type": "log_investigation",
             "title": "Unsupported backend case",
             "summary": "Case for unsupported backend.",
         },
@@ -209,7 +215,8 @@ def test_first_predefined_observation_executes_through_the_api_path():
     case_id = client.post(
         "/cases",
         json={
-            "workflow_type": "log_investigation",
+            "client_id": "test-client",
+                "workflow_type": "log_investigation",
             "title": "Execute observation case",
             "summary": "Case for the first backend slice.",
         },
@@ -273,7 +280,8 @@ def test_workspace_zip_ingestion_executes_through_the_api_path(monkeypatch):
     case_id = client.post(
         "/cases",
         json={
-            "workflow_type": "log_investigation",
+            "client_id": "test-client",
+                "workflow_type": "log_investigation",
             "title": "Workspace ZIP case",
             "summary": "Case for workspace ZIP ingestion.",
         },
@@ -360,7 +368,8 @@ def test_invalid_payload_shape_fails_clearly():
     case_id = client.post(
         "/cases",
         json={
-            "workflow_type": "log_investigation",
+            "client_id": "test-client",
+                "workflow_type": "log_investigation",
             "title": "Invalid payload case",
             "summary": "Case for invalid payload testing.",
         },
@@ -399,7 +408,8 @@ def test_second_predefined_observation_executes_through_the_api_path():
     case_id = client.post(
         "/cases",
         json={
-            "workflow_type": "log_investigation",
+            "client_id": "test-client",
+                "workflow_type": "log_investigation",
             "title": "Execute denied filter case",
             "summary": "Case for the second backend slice.",
         },
@@ -476,7 +486,8 @@ def test_basic_analytics_bundle_executes_through_the_api_path():
     case_id = client.post(
         "/cases",
         json={
-            "workflow_type": "log_investigation",
+            "client_id": "test-client",
+                "workflow_type": "log_investigation",
             "title": "Execute analytics case",
             "summary": "Case for the analytics bundle slice.",
         },
@@ -574,7 +585,8 @@ def test_top_talkers_basic_executes_through_the_api_path():
     case_id = client.post(
         "/cases",
         json={
-            "workflow_type": "log_investigation",
+            "client_id": "test-client",
+                "workflow_type": "log_investigation",
             "title": "Execute top talkers case",
             "summary": "Case for the top talkers slice.",
         },
@@ -674,7 +686,8 @@ def test_run_status_artifacts_and_artifact_content_are_readable_for_current_slic
     case_id = client.post(
         "/cases",
         json={
-            "workflow_type": "log_investigation",
+            "client_id": "test-client",
+                "workflow_type": "log_investigation",
             "title": "Operational surface case",
             "summary": "Case for status and artifact inspection.",
         },

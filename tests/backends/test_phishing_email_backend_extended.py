@@ -61,7 +61,8 @@ def _make_run_and_obs(payload):
     registry = StaticBackendRegistry()
     artifact = make_input_artifact()
 
-    case = create_case(case_repo, workflow_type=WorkflowType.DEFENSIVE_ANALYSIS, title="T", summary="S")
+    case = create_case(case_repo, client_id="test-client",
+        workflow_type=WorkflowType.DEFENSIVE_ANALYSIS, title="T", summary="S")
     run = create_run_for_case(case_repo, run_repo, registry, audit, case_id=case.case_id, backend_id=PHISHING_EMAIL_BACKEND_ID)
     obs = _make_observation_request(run, case)
     outcome = execute_predefined_observation(run=run, input_artifact=artifact, input_payload=payload, observation_request=obs)

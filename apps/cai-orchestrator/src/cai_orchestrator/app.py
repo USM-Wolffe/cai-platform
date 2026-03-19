@@ -380,6 +380,7 @@ def _run_phishing_investigate_command(args: argparse.Namespace) -> int:
                 from cai_orchestrator.flows import run_phishing_monitor_single_email
                 result = run_phishing_monitor_single_email(
                     orchestrator.platform_api_client,
+                    client_id=args.client_id,
                     raw_eml=raw_eml,
                     title="Phishing investigation (CLI)",
                     summary="Automated phishing investigation from run-phishing-investigate CLI.",
@@ -462,6 +463,7 @@ def _run_phishing_monitor_command(args: argparse.Namespace) -> int:
                 try:
                     result = run_phishing_monitor_single_email(
                         orchestrator.platform_api_client,
+                        client_id=args.client_id,
                         raw_eml=raw_eml,
                         title=f"{title_prefix} #{i + 1}",
                         summary="Phishing email from IMAP monitor — automated analysis.",
@@ -543,6 +545,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Poll IMAP mailbox for forwarded phishing emails and run the full assessment pipeline.",
     )
     phishing_monitor.add_argument(
+        "--client-id",
+        required=True,
+        help="EGS client identifier for multi-tenant isolation.",
+    )
+    phishing_monitor.add_argument(
         "--title-prefix",
         default="Phishing email",
         help="Prefix for auto-generated case titles (e.g. 'Suspicious email').",
@@ -578,6 +585,11 @@ def _build_parser() -> argparse.ArgumentParser:
     phishing_investigate = subparsers.add_parser(
         "run-phishing-investigate",
         help="Investigate one phishing email using the multi-agent CAI pipeline. Requires the cai extra.",
+    )
+    phishing_investigate.add_argument(
+        "--client-id",
+        required=True,
+        help="EGS client identifier for multi-tenant isolation.",
     )
     phishing_investigate.add_argument(
         "--eml-file",
@@ -628,6 +640,7 @@ def _build_parser() -> argparse.ArgumentParser:
         watchguard_guarded_query,
         phishing_email_basic_assessment,
     ):
+        subparser.add_argument("--client-id", required=True, help="EGS client identifier for multi-tenant isolation.")
         subparser.add_argument("--title", required=True, help="Case title.")
         subparser.add_argument("--summary", required=True, help="Case summary.")
         subparser.add_argument(
@@ -730,6 +743,7 @@ def _build_watchguard_request(
     payload: dict[str, object],
 ) -> WatchGuardInvestigationRequest:
     return WatchGuardInvestigationRequest(
+        client_id=args.client_id,
         title=args.title,
         summary=args.summary,
         payload=payload,
@@ -742,6 +756,7 @@ def _build_watchguard_guarded_query_request(
     query: dict[str, object],
 ) -> WatchGuardGuardedQueryRequest:
     return WatchGuardGuardedQueryRequest(
+        client_id=args.client_id,
         title=args.title,
         summary=args.summary,
         payload=payload,
@@ -758,6 +773,7 @@ def _build_phishing_email_request(
     payload: dict[str, object],
 ) -> PhishingEmailAssessmentRequest:
     return PhishingEmailAssessmentRequest(
+        client_id=args.client_id,
         title=args.title,
         summary=args.summary,
         payload=payload,

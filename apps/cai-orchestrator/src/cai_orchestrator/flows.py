@@ -23,6 +23,7 @@ PHISHING_EMAIL_WORKFLOW_TYPE = "defensive_analysis"
 class WatchGuardInvestigationRequest:
     """Operator input for the first WatchGuard orchestration slice."""
 
+    client_id: str
     title: str
     summary: str
     payload: dict[str, Any]
@@ -33,6 +34,7 @@ class WatchGuardInvestigationRequest:
 class WatchGuardGuardedQueryRequest:
     """Operator input for the first guarded WatchGuard custom-query slice."""
 
+    client_id: str
     title: str
     summary: str
     payload: dict[str, Any]
@@ -62,6 +64,7 @@ class WatchGuardInvestigationResult:
 class PhishingEmailAssessmentRequest:
     """Operator input for the phishing email assessment slice."""
 
+    client_id: str
     title: str
     summary: str
     payload: dict[str, Any]
@@ -156,6 +159,7 @@ def run_watchguard_guarded_custom_query(
     case_response = _run_phase(
         phase="create_case",
         operation=lambda: client.create_case(
+            client_id=request.client_id,
             workflow_type=WATCHGUARD_WORKFLOW_TYPE,
             title=request.title,
             summary=request.summary,
@@ -220,6 +224,7 @@ def run_phishing_email_basic_assessment(
     case_response = _run_phase(
         phase="create_case",
         operation=lambda: client.create_case(
+            client_id=request.client_id,
             workflow_type=PHISHING_EMAIL_WORKFLOW_TYPE,
             title=request.title,
             summary=request.summary,
@@ -284,6 +289,7 @@ class PhishingMonitorEmailResult:
 def run_phishing_monitor_single_email(
     client: PlatformApiClient,
     *,
+    client_id: str,
     raw_eml: bytes,
     title: str,
     summary: str,
@@ -305,6 +311,7 @@ def run_phishing_monitor_single_email(
     case_response = _run_phase(
         phase="create_case",
         operation=lambda: client.create_case(
+            client_id=client_id,
             workflow_type=PHISHING_EMAIL_WORKFLOW_TYPE,
             title=title,
             summary=summary,
@@ -379,6 +386,7 @@ def _run_watchguard_operation(
     case_response = _run_phase(
         phase="create_case",
         operation=lambda: client.create_case(
+            client_id=request.client_id,
             workflow_type=WATCHGUARD_WORKFLOW_TYPE,
             title=request.title,
             summary=request.summary,
@@ -430,6 +438,7 @@ def _validate_request(request: WatchGuardInvestigationRequest) -> None:
 def _validate_guarded_query_request(request: WatchGuardGuardedQueryRequest) -> None:
     _validate_request(
         WatchGuardInvestigationRequest(
+            client_id=request.client_id,
             title=request.title,
             summary=request.summary,
             payload=request.payload,

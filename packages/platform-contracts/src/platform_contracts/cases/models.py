@@ -46,6 +46,7 @@ class Case(TimestampedModel):
     """Canonical durable record for one investigation case."""
 
     case_id: str = Field(default_factory=lambda: generate_opaque_id("case"), min_length=1)
+    client_id: str = Field(min_length=1)
     workflow_type: WorkflowType
     status: CaseStatus = CaseStatus.OPEN
     title: str = Field(min_length=1)

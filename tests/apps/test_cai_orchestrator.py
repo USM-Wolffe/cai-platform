@@ -34,6 +34,7 @@ def test_platform_api_client_calls_expected_endpoints_for_the_first_slice():
 
     client.health()
     client.create_case(
+        client_id="test-client",
         workflow_type="log_investigation",
         title="Case",
         summary="Summary",
@@ -66,7 +67,7 @@ def test_platform_api_client_calls_expected_endpoints_for_the_first_slice():
         (
             "POST",
             "/cases",
-            {"workflow_type": "log_investigation", "title": "Case", "summary": "Summary", "metadata": {}},
+            {"client_id": "test-client", "workflow_type": "log_investigation", "title": "Case", "summary": "Summary", "metadata": {}},
         ),
         (
             "POST",
@@ -290,6 +291,7 @@ def test_first_orchestration_flow_performs_the_correct_ordered_api_calls():
 
     result = app.start_watchguard_log_investigation(
         WatchGuardInvestigationRequest(
+            client_id="test-client",
             title="Case",
             summary="Summary",
             payload=build_watchguard_traffic_csv_payload(
@@ -352,6 +354,7 @@ def test_structured_failure_from_platform_api_is_surfaced_clearly():
     with pytest.raises(OrchestrationFlowError) as exc_info:
         app.start_watchguard_log_investigation(
             WatchGuardInvestigationRequest(
+                client_id="test-client",
                 title="Case",
                 summary="Summary",
                 payload=build_watchguard_traffic_csv_payload(
@@ -407,6 +410,7 @@ def test_second_orchestration_flow_performs_the_correct_ordered_api_calls():
 
     result = app.start_watchguard_denied_events_investigation(
         WatchGuardInvestigationRequest(
+            client_id="test-client",
             title="Case",
             summary="Summary",
             payload=build_watchguard_traffic_csv_payload(
@@ -508,6 +512,7 @@ def test_third_orchestration_flow_performs_the_correct_ordered_api_calls():
 
     result = app.start_watchguard_analytics_bundle_investigation(
         WatchGuardInvestigationRequest(
+            client_id="test-client",
             title="Case",
             summary="Summary",
             payload=build_watchguard_traffic_csv_payload(
@@ -592,6 +597,7 @@ def test_fourth_orchestration_flow_performs_the_correct_ordered_api_calls():
 
     result = app.start_watchguard_top_talkers_basic_investigation(
         WatchGuardInvestigationRequest(
+            client_id="test-client",
             title="Case",
             summary="Summary",
             payload=build_watchguard_traffic_csv_payload(
@@ -686,6 +692,7 @@ def test_guarded_custom_query_flow_performs_the_correct_ordered_api_calls():
 
     result = app.start_watchguard_guarded_query_investigation(
         WatchGuardGuardedQueryRequest(
+            client_id="test-client",
             title="Case",
             summary="Summary",
             payload=build_watchguard_traffic_csv_payload(
@@ -733,6 +740,7 @@ def test_orchestrator_can_drive_the_real_platform_api_vertical_slice():
 
     result = app.start_watchguard_log_investigation(
         WatchGuardInvestigationRequest(
+            client_id="test-client",
             title="CAI orchestrator case",
             summary="Drive the first platform slice through platform-api.",
             payload=build_watchguard_traffic_csv_payload(
@@ -774,6 +782,7 @@ def test_orchestrator_can_drive_the_real_denied_filter_vertical_slice():
 
     result = app.start_watchguard_denied_events_investigation(
         WatchGuardInvestigationRequest(
+            client_id="test-client",
             title="CAI denied filter case",
             summary="Drive the denied-event filter slice through platform-api.",
             payload=build_watchguard_traffic_csv_payload(
@@ -833,6 +842,7 @@ def test_orchestrator_can_drive_the_real_basic_analytics_vertical_slice():
 
     result = app.start_watchguard_analytics_bundle_investigation(
         WatchGuardInvestigationRequest(
+            client_id="test-client",
             title="CAI analytics case",
             summary="Drive the basic analytics slice through platform-api.",
             payload=build_watchguard_traffic_csv_payload(
@@ -906,6 +916,7 @@ def test_orchestrator_can_drive_the_real_top_talkers_vertical_slice():
 
     result = app.start_watchguard_top_talkers_basic_investigation(
         WatchGuardInvestigationRequest(
+            client_id="test-client",
             title="CAI top talkers case",
             summary="Drive the top talkers slice through platform-api.",
             payload=build_watchguard_traffic_csv_payload(
@@ -984,6 +995,7 @@ def test_orchestrator_can_drive_the_real_guarded_custom_query_vertical_slice():
 
     result = app.start_watchguard_guarded_query_investigation(
         WatchGuardGuardedQueryRequest(
+            client_id="test-client",
             title="CAI guarded query case",
             summary="Drive the guarded custom query slice through platform-api.",
             payload=build_watchguard_traffic_csv_payload(
@@ -1051,6 +1063,7 @@ def test_orchestrator_can_read_operational_surface_through_platform_api():
 
     result = app.start_watchguard_analytics_bundle_investigation(
         WatchGuardInvestigationRequest(
+            client_id="test-client",
             title="Operational read case",
             summary="Create a run and inspect it through operational endpoints.",
             payload=build_watchguard_traffic_csv_payload(
@@ -1094,6 +1107,7 @@ def test_invalid_operator_input_fails_before_any_api_call():
     with pytest.raises(InvalidOperatorInputError):
         app.start_watchguard_log_investigation(
             WatchGuardInvestigationRequest(
+                client_id="test-client",
                 title=" ",
                 summary="Summary",
                 payload={"records": []},

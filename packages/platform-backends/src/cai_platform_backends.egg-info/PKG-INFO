@@ -8,6 +8,7 @@ Requires-Dist: boto3<2,>=1
 Requires-Dist: cai-platform-adapters>=0.1.0
 Requires-Dist: cai-platform-contracts>=0.1.0
 Requires-Dist: cai-platform-core>=0.1.0
+Requires-Dist: duckdb<2,>=1
 Provides-Extra: test
 Requires-Dist: pytest<9,>=8; extra == "test"
 

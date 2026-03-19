@@ -21,9 +21,11 @@ from platform_backends.phishing_email import (
 )
 from platform_backends.watchguard_logs import (
     WATCHGUARD_ANALYTICS_BUNDLE_BASIC_OPERATION,
+    WATCHGUARD_DUCKDB_WORKSPACE_ANALYTICS_OPERATION,
     WATCHGUARD_FILTER_DENIED_EVENTS_OPERATION,
     WATCHGUARD_LOGS_BACKEND_ID,
     WATCHGUARD_NORMALIZE_SUMMARY_OPERATION,
+    WATCHGUARD_STAGE_WORKSPACE_ZIP_OPERATION,
     WATCHGUARD_TOP_TALKERS_BASIC_OPERATION,
     WATCHGUARD_WORKSPACE_ZIP_INGESTION_OPERATION,
 )
@@ -157,6 +159,36 @@ def execute_watchguard_top_talkers_basic_endpoint(
         runtime=runtime,
         backend_id=WATCHGUARD_LOGS_BACKEND_ID,
         operation_kind=WATCHGUARD_TOP_TALKERS_BASIC_OPERATION,
+    )
+
+
+@router.post("/{run_id}/observations/watchguard-stage-workspace-zip", response_model=None)
+def execute_watchguard_stage_workspace_zip_endpoint(
+    run_id: str,
+    request: ExecuteObservationRequest = Body(default_factory=ExecuteObservationRequest),
+    runtime: AppRuntime = Depends(get_runtime),
+) -> object:
+    return _run_observation(
+        run_id=run_id,
+        request_body=request,
+        runtime=runtime,
+        backend_id=WATCHGUARD_LOGS_BACKEND_ID,
+        operation_kind=WATCHGUARD_STAGE_WORKSPACE_ZIP_OPERATION,
+    )
+
+
+@router.post("/{run_id}/observations/watchguard-duckdb-workspace-analytics", response_model=None)
+def execute_watchguard_duckdb_workspace_analytics_endpoint(
+    run_id: str,
+    request: ExecuteObservationRequest = Body(default_factory=ExecuteObservationRequest),
+    runtime: AppRuntime = Depends(get_runtime),
+) -> object:
+    return _run_observation(
+        run_id=run_id,
+        request_body=request,
+        runtime=runtime,
+        backend_id=WATCHGUARD_LOGS_BACKEND_ID,
+        operation_kind=WATCHGUARD_DUCKDB_WORKSPACE_ANALYTICS_OPERATION,
     )
 
 

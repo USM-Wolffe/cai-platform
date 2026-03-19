@@ -9,7 +9,9 @@ import gzip
 import hashlib
 import io
 import json
+import os
 import tarfile
+import tempfile
 from typing import Any
 import zipfile
 
@@ -39,10 +41,13 @@ from platform_core import ContractViolationError
 
 from platform_backends.watchguard_logs.descriptor import (
     WATCHGUARD_ANALYTICS_BUNDLE_BASIC_OPERATION,
+    WATCHGUARD_DUCKDB_WORKSPACE_ANALYTICS_OPERATION,
+    WATCHGUARD_DUCKDB_WORKSPACE_QUERY_CLASS,
     WATCHGUARD_FILTER_DENIED_EVENTS_OPERATION,
     WATCHGUARD_GUARDED_FILTERED_ROWS_QUERY_CLASS,
     WATCHGUARD_LOGS_BACKEND_ID,
     WATCHGUARD_NORMALIZE_SUMMARY_OPERATION,
+    WATCHGUARD_STAGE_WORKSPACE_ZIP_OPERATION,
     WATCHGUARD_TOP_TALKERS_BASIC_OPERATION,
     WATCHGUARD_WORKSPACE_ZIP_INGESTION_OPERATION,
 )
@@ -84,6 +89,20 @@ def execute_predefined_observation(
         inspect_watchguard_input_artifact(input_artifact)
         if observation_request.operation_kind == WATCHGUARD_WORKSPACE_ZIP_INGESTION_OPERATION:
             return _execute_workspace_zip_ingestion(
+                run=run,
+                input_artifact=input_artifact,
+                input_payload=input_payload,
+                observation_request=observation_request,
+            )
+        if observation_request.operation_kind == WATCHGUARD_STAGE_WORKSPACE_ZIP_OPERATION:
+            return _execute_stage_workspace_zip(
+                run=run,
+                input_artifact=input_artifact,
+                input_payload=input_payload,
+                observation_request=observation_request,
+            )
+        if observation_request.operation_kind == WATCHGUARD_DUCKDB_WORKSPACE_ANALYTICS_OPERATION:
+            return _execute_duckdb_workspace_analytics(
                 run=run,
                 input_artifact=input_artifact,
                 input_payload=input_payload,
@@ -190,6 +209,248 @@ def execute_guarded_custom_query(
     )
 
 
+def execute_duckdb_workspace_query(
+    *,
+    run: Run,
+    input_artifact: Artifact,
+    input_payload: object,
+    query_request: QueryRequest,
+) -> WatchGuardCustomQueryOutcome:
+    """Execute a guarded DuckDB query over staged WatchGuard CSV files in S3.
+
+    The input artifact must be a staging manifest produced by stage_workspace_zip.
+    The query_request.parameters must include a 'query' dict with:
+      family: 'traffic' | 'event' | 'alarm'
+      filters: list of {field, op, value}
+      limit: int (max 500)
+    """
+    if query_request.backend_ref.id != WATCHGUARD_LOGS_BACKEND_ID:
+        raise InvalidWatchGuardQueryError("query backend is not watchguard_logs")
+    if query_request.requested_scope != WATCHGUARD_DUCKDB_WORKSPACE_QUERY_CLASS:
+        raise InvalidWatchGuardQueryError(
+            f"unsupported requested_scope '{query_request.requested_scope}' for DuckDB workspace queries"
+        )
+
+    staging = _parse_staging_manifest(input_payload)
+    raw_query = query_request.parameters.get("query")
+    if not isinstance(raw_query, dict):
+        raise InvalidWatchGuardQueryError("DuckDB workspace query must include a 'query' mapping in parameters")
+
+    family = raw_query.get("family", WATCHGUARD_TRAFFIC_LOG_TYPE)
+    if family not in WATCHGUARD_INGESTION_FAMILIES:
+        raise InvalidWatchGuardQueryError(
+            f"DuckDB workspace query 'family' must be one of: {', '.join(WATCHGUARD_INGESTION_FAMILIES)}"
+        )
+    raw_filters = raw_query.get("filters", [])
+    if not isinstance(raw_filters, list):
+        raise InvalidWatchGuardQueryError("DuckDB workspace query 'filters' must be a list")
+    limit = int(raw_query.get("limit", GUARDED_QUERY_DEFAULT_LIMIT))
+    if limit < 1 or limit > _DUCKDB_MAX_LIMIT:
+        raise InvalidWatchGuardQueryError(f"DuckDB workspace query limit must be between 1 and {_DUCKDB_MAX_LIMIT}")
+
+    rows, matched_count = _run_duckdb_filtered_query(
+        bucket=staging["bucket"],
+        staging_prefix=staging["staging_prefix"],
+        family=family,
+        raw_filters=raw_filters,
+        limit=limit,
+    )
+
+    artifact_payload: dict[str, Any] = {
+        "query_class": WATCHGUARD_DUCKDB_WORKSPACE_QUERY_CLASS,
+        "workspace": staging["workspace"],
+        "staging_prefix": staging["staging_prefix"],
+        "family": family,
+        "filters": raw_filters,
+        "limit": limit,
+        "matched_row_count": matched_count,
+        "returned_row_count": len(rows),
+        "truncated": matched_count > limit,
+        "rows": rows,
+    }
+    serialized = json.dumps(artifact_payload, sort_keys=True)
+    content_hash = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    artifact = Artifact(
+        kind=ArtifactKind.QUERY_RESULT,
+        subtype="watchguard.duckdb_workspace_query",
+        format="json",
+        storage_ref=(
+            f"backend://watchguard_logs/runs/{run.run_id}/"
+            f"queries/{query_request.query_request_id}/duckdb_workspace_query.json"
+        ),
+        content_hash=f"sha256:{content_hash}",
+        produced_by_backend_ref=EntityRef(entity_type=EntityKind.BACKEND, id=WATCHGUARD_LOGS_BACKEND_ID),
+        produced_by_run_ref=EntityRef(entity_type=EntityKind.RUN, id=run.run_id),
+        summary=(
+            f"DuckDB query over {family} logs: {len(rows)} rows returned "
+            f"(matched {matched_count}, limit {limit})."
+        ),
+        metadata=artifact_payload,
+    )
+    return WatchGuardCustomQueryOutcome(
+        artifacts=[artifact],
+        query_summary={
+            "query_class": WATCHGUARD_DUCKDB_WORKSPACE_QUERY_CLASS,
+            "family": family,
+            "matched_row_count": matched_count,
+            "returned_row_count": len(rows),
+            "limit": limit,
+            "truncated": matched_count > limit,
+        },
+    )
+
+
+def _execute_stage_workspace_zip(
+    *,
+    run: Run,
+    input_artifact: Artifact,
+    input_payload: object,
+    observation_request: ObservationRequest,
+) -> WatchGuardExecutionOutcome:
+    """Download the workspace ZIP from S3 to a temp file, extract TARs → CSVs, upload to S3 staging."""
+    reference = parse_workspace_s3_zip_reference(input_payload)
+    upload_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    staging_prefix = f"workspaces/{reference.workspace}/staging/{upload_id}"
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        zip_path = os.path.join(tmp_dir, "raw.zip")
+        _download_s3_object_to_file(reference.bucket, reference.object_key, zip_path)
+        stats = _stage_zip_to_s3(
+            zip_path=zip_path,
+            bucket=reference.bucket,
+            staging_prefix=staging_prefix,
+            workspace=reference.workspace,
+        )
+
+    manifest_payload: dict[str, Any] = {
+        "source": "workspace_staging",
+        "workspace": reference.workspace,
+        "upload_id": upload_id,
+        "staging_prefix": staging_prefix,
+        "bucket": reference.bucket,
+        "origin_s3_uri": reference.s3_uri,
+        "families": stats["families"],
+        "date_range": stats["date_range"],
+        "total_csv_files": stats["total_csv_files"],
+        "family_counts": stats["family_counts"],
+    }
+    manifest_artifact = Artifact(
+        kind=ArtifactKind.ANALYSIS_OUTPUT,
+        subtype="watchguard.workspace_staging_manifest",
+        format="json",
+        storage_ref=(
+            f"backend://watchguard_logs/runs/{run.run_id}/"
+            f"observations/{observation_request.observation_id}/staging_manifest.json"
+        ),
+        content_hash=_content_hash_for_payload(manifest_payload),
+        produced_by_backend_ref=EntityRef(entity_type=EntityKind.BACKEND, id=WATCHGUARD_LOGS_BACKEND_ID),
+        produced_by_run_ref=EntityRef(entity_type=EntityKind.RUN, id=run.run_id),
+        produced_by_observation_ref=EntityRef(
+            entity_type=EntityKind.OBSERVATION_REQUEST,
+            id=observation_request.observation_id,
+        ),
+        summary=(
+            f"Staged workspace ZIP to s3://{reference.bucket}/{staging_prefix} — "
+            f"{stats['total_csv_files']} CSV files across {len(stats['families'])} families."
+        ),
+        metadata=manifest_payload,
+    )
+    total_files = stats["total_csv_files"]
+    status = ObservationStatus.SUCCEEDED if total_files > 0 else ObservationStatus.SUCCEEDED_NO_FINDINGS
+    observation_result = ObservationResult(
+        observation_ref=EntityRef(entity_type=EntityKind.OBSERVATION_REQUEST, id=observation_request.observation_id),
+        status=status,
+        output_artifact_refs=[EntityRef(entity_type=EntityKind.ARTIFACT, id=manifest_artifact.artifact_id)],
+        structured_summary={
+            "workspace": reference.workspace,
+            "staging_prefix": staging_prefix,
+            "bucket": reference.bucket,
+            "upload_id": upload_id,
+            "total_csv_files": total_files,
+            "families": stats["families"],
+            "date_range": stats["date_range"],
+            "family_counts": stats["family_counts"],
+            "summary": (
+                f"Staged {total_files} CSV files from workspace ZIP to "
+                f"s3://{reference.bucket}/{staging_prefix}."
+            ),
+        },
+        provenance={
+            "backend_id": WATCHGUARD_LOGS_BACKEND_ID,
+            "operation_kind": observation_request.operation_kind,
+            "origin_s3_uri": reference.s3_uri,
+            "staging_prefix": staging_prefix,
+        },
+    )
+    return WatchGuardExecutionOutcome(artifacts=[manifest_artifact], observation_result=observation_result)
+
+
+def _execute_duckdb_workspace_analytics(
+    *,
+    run: Run,
+    input_artifact: Artifact,
+    input_payload: object,
+    observation_request: ObservationRequest,
+) -> WatchGuardExecutionOutcome:
+    """Run DuckDB analytics over staged CSV files in S3. Returns aggregations only — no raw rows."""
+    staging = _parse_staging_manifest(input_payload)
+    analytics = _run_duckdb_analytics(
+        bucket=staging["bucket"],
+        staging_prefix=staging["staging_prefix"],
+        families=staging.get("families", list(WATCHGUARD_INGESTION_FAMILIES)),
+    )
+
+    analytics_payload: dict[str, Any] = {
+        "source": "duckdb_workspace_analytics",
+        "workspace": staging["workspace"],
+        "staging_prefix": staging["staging_prefix"],
+        "upload_id": staging.get("upload_id", ""),
+        **analytics,
+    }
+    artifact = Artifact(
+        kind=ArtifactKind.ANALYSIS_OUTPUT,
+        subtype="watchguard.duckdb_workspace_analytics",
+        format="json",
+        storage_ref=(
+            f"backend://watchguard_logs/runs/{run.run_id}/"
+            f"observations/{observation_request.observation_id}/duckdb_workspace_analytics.json"
+        ),
+        content_hash=_content_hash_for_payload(analytics_payload),
+        produced_by_backend_ref=EntityRef(entity_type=EntityKind.BACKEND, id=WATCHGUARD_LOGS_BACKEND_ID),
+        produced_by_run_ref=EntityRef(entity_type=EntityKind.RUN, id=run.run_id),
+        produced_by_observation_ref=EntityRef(
+            entity_type=EntityKind.OBSERVATION_REQUEST,
+            id=observation_request.observation_id,
+        ),
+        summary=f"DuckDB analytics over staged WatchGuard logs at {staging['staging_prefix']}.",
+        metadata=analytics_payload,
+    )
+    traffic_count = analytics.get("traffic", {}).get("total_rows", 0)
+    status = ObservationStatus.SUCCEEDED if traffic_count > 0 else ObservationStatus.SUCCEEDED_NO_FINDINGS
+    observation_result = ObservationResult(
+        observation_ref=EntityRef(entity_type=EntityKind.OBSERVATION_REQUEST, id=observation_request.observation_id),
+        status=status,
+        output_artifact_refs=[EntityRef(entity_type=EntityKind.ARTIFACT, id=artifact.artifact_id)],
+        structured_summary={
+            "workspace": staging["workspace"],
+            "staging_prefix": staging["staging_prefix"],
+            "traffic_total_rows": traffic_count,
+            "alarm_total_rows": analytics.get("alarm", {}).get("total_rows", 0),
+            "event_total_rows": analytics.get("event", {}).get("total_rows", 0),
+            "summary": (
+                f"DuckDB analytics completed: {traffic_count} traffic rows, "
+                f"{analytics.get('alarm', {}).get('total_rows', 0)} alarm rows."
+            ),
+        },
+        provenance={
+            "backend_id": WATCHGUARD_LOGS_BACKEND_ID,
+            "operation_kind": observation_request.operation_kind,
+            "staging_prefix": staging["staging_prefix"],
+        },
+    )
+    return WatchGuardExecutionOutcome(artifacts=[artifact], observation_result=observation_result)
+
+
 def _execute_workspace_zip_ingestion(
     *,
     run: Run,
@@ -258,6 +519,8 @@ def _validate_observation_request(*, run: Run, observation_request: ObservationR
         WATCHGUARD_FILTER_DENIED_EVENTS_OPERATION,
         WATCHGUARD_ANALYTICS_BUNDLE_BASIC_OPERATION,
         WATCHGUARD_TOP_TALKERS_BASIC_OPERATION,
+        WATCHGUARD_STAGE_WORKSPACE_ZIP_OPERATION,
+        WATCHGUARD_DUCKDB_WORKSPACE_ANALYTICS_OPERATION,
     }:
         raise UnsupportedWatchGuardObservationError(
             f"unsupported operation_kind '{observation_request.operation_kind}'"
@@ -1082,3 +1345,358 @@ def _content_hash_for_payload(payload: dict[str, Any]) -> str:
     serialized_payload = json.dumps(payload, sort_keys=True)
     digest = hashlib.sha256(serialized_payload.encode("utf-8")).hexdigest()
     return f"sha256:{digest}"
+
+
+# ── DuckDB / staging helpers ─────────────────────────────────────────────────
+
+_DUCKDB_MAX_LIMIT = 500
+_DUCKDB_S3_REGION = os.environ.get("AWS_DEFAULT_REGION", "us-east-2")
+
+# Column names for each family's CSV (no headers in the real files)
+_TRAFFIC_COLUMNS = [
+    "timestamp", "action_raw", "firewall_id", "msg_id", "code", "action",
+    "policy", "app", "protocol", "src_zone", "dst_zone",
+    "src_ip", "src_port", "dst_ip", "dst_port",
+    "c15", "c16", "c17", "c18", "c19", "c20", "c21", "c22",
+    "dns_type", "dns_name", "c25", "c26", "c27",
+    "bytes_sent", "bytes_recv", "status_msg",
+]
+_ALARM_COLUMNS = [
+    "timestamp", "type", "category", "firewall_id", "device_id",
+    "process", "severity", "null_field", "msg_id", "code",
+    "alarm_type", "notification_method", "local_time", "description",
+]
+_EVENT_COLUMNS = [
+    "timestamp", "type", "category", "firewall_id", "device_id",
+    "process", "null_field", "msg_id", "code", "message",
+]
+_FAMILY_COLUMNS: dict[str, list[str]] = {
+    WATCHGUARD_TRAFFIC_LOG_TYPE: _TRAFFIC_COLUMNS,
+    WATCHGUARD_ALARM_LOG_TYPE: _ALARM_COLUMNS,
+    WATCHGUARD_EVENT_LOG_TYPE: _EVENT_COLUMNS,
+}
+
+# Fields allowed in DuckDB guarded queries per family
+_DUCKDB_ALLOWED_FIELDS: dict[str, set[str]] = {
+    WATCHGUARD_TRAFFIC_LOG_TYPE: {"src_ip", "dst_ip", "action", "protocol", "policy", "src_port", "dst_port"},
+    WATCHGUARD_ALARM_LOG_TYPE: {"alarm_type", "src_ip", "timestamp"},
+    WATCHGUARD_EVENT_LOG_TYPE: {"type", "timestamp"},
+}
+
+
+def _download_s3_object_to_file(bucket: str, object_key: str, dest_path: str) -> None:
+    """Stream-download an S3 object to a local file path (no full-file RAM load)."""
+    try:
+        import boto3
+    except ImportError as exc:
+        raise WatchGuardLogsBackendError("boto3 is required for workspace staging") from exc
+    boto3.client("s3").download_file(bucket, object_key, dest_path)
+
+
+def _stage_zip_to_s3(
+    *,
+    zip_path: str,
+    bucket: str,
+    staging_prefix: str,
+    workspace: str,
+) -> dict[str, Any]:
+    """Extract workspace ZIP → TAR → CSVs and upload each CSV to S3 staging prefix.
+
+    Returns staging statistics: families found, date_range, total_csv_files, family_counts.
+    """
+    try:
+        import boto3
+    except ImportError as exc:
+        raise WatchGuardLogsBackendError("boto3 is required for workspace staging") from exc
+
+    s3_client = boto3.client("s3")
+    family_counts: dict[str, dict[str, Any]] = {f: {"csv_files": 0, "dates": set()} for f in WATCHGUARD_INGESTION_FAMILIES}
+    total_csv_files = 0
+    all_dates: list[str] = []
+
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for member in zf.infolist():
+            if member.is_dir():
+                continue
+            normalized = member.filename.replace("\\", "/")
+            classification = _classify_workspace_entry(normalized)
+            if classification is None:
+                continue
+
+            family = classification["log_family"]
+            date = classification["date"]
+
+            if not normalized.lower().endswith(".tar"):
+                continue
+
+            tar_bytes = zf.read(member)
+            try:
+                with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:*") as tf:
+                    for tar_member in tf.getmembers():
+                        if not tar_member.isfile():
+                            continue
+                        if not tar_member.name.lower().endswith((".csv", ".txt")):
+                            continue
+                        extracted = tf.extractfile(tar_member)
+                        if extracted is None:
+                            continue
+                        csv_data = extracted.read()
+                        if not csv_data.strip():
+                            continue
+
+                        csv_filename = os.path.basename(tar_member.name.replace("\\", "/"))
+                        s3_key = f"{staging_prefix}/{family}/{date}/{csv_filename}"
+                        s3_client.put_object(Bucket=bucket, Key=s3_key, Body=csv_data)
+
+                        family_counts[family]["csv_files"] += 1
+                        family_counts[family]["dates"].add(date)
+                        all_dates.append(date)
+                        total_csv_files += 1
+            except tarfile.TarError:
+                continue
+
+    families_present = [f for f in WATCHGUARD_INGESTION_FAMILIES if family_counts[f]["csv_files"] > 0]
+    date_range = {
+        "min": min(all_dates) if all_dates else None,
+        "max": max(all_dates) if all_dates else None,
+    }
+    serializable_counts = {
+        f: {"csv_files": family_counts[f]["csv_files"], "dates": sorted(family_counts[f]["dates"])}
+        for f in WATCHGUARD_INGESTION_FAMILIES
+    }
+    return {
+        "families": families_present,
+        "date_range": date_range,
+        "total_csv_files": total_csv_files,
+        "family_counts": serializable_counts,
+    }
+
+
+def _parse_staging_manifest(payload: object) -> dict[str, Any]:
+    """Validate and return the staging manifest dict from an artifact payload."""
+    if not isinstance(payload, dict):
+        raise WatchGuardLogsBackendError("DuckDB operation requires a staging manifest artifact as input")
+    source = payload.get("source")
+    if source != "workspace_staging":
+        raise WatchGuardLogsBackendError(
+            "DuckDB operation requires an artifact with source='workspace_staging' "
+            "(output of stage_workspace_zip)"
+        )
+    required = ("workspace", "staging_prefix", "bucket")
+    missing = [k for k in required if not payload.get(k)]
+    if missing:
+        raise WatchGuardLogsBackendError(
+            f"Staging manifest is missing required fields: {', '.join(missing)}"
+        )
+    return payload  # type: ignore[return-value]
+
+
+def _duckdb_connect_with_s3(bucket: str) -> "Any":
+    """Return a DuckDB connection configured for S3 access via boto3 credentials."""
+    try:
+        import duckdb
+    except ImportError as exc:
+        raise WatchGuardLogsBackendError(
+            "duckdb is required for workspace analytics. "
+            "Install with: pip install duckdb"
+        ) from exc
+    try:
+        import boto3
+    except ImportError as exc:
+        raise WatchGuardLogsBackendError("boto3 is required for workspace analytics") from exc
+
+    con = duckdb.connect()
+    con.execute("INSTALL httpfs; LOAD httpfs;")
+    con.execute(f"SET s3_region='{_DUCKDB_S3_REGION}';")
+
+    # Propagate boto3 credentials (works with IAM roles, env vars, ~/.aws/credentials)
+    session = boto3.Session()
+    creds = session.get_credentials()
+    if creds is not None:
+        frozen = creds.get_frozen_credentials()
+        con.execute(f"SET s3_access_key_id='{frozen.access_key}';")
+        con.execute(f"SET s3_secret_access_key='{frozen.secret_key}';")
+        if frozen.token:
+            con.execute(f"SET s3_session_token='{frozen.token}';")
+    return con
+
+
+def _list_staging_csvs(*, bucket: str, staging_prefix: str, family: str) -> list[str]:
+    """List all staged CSV S3 keys for a given family."""
+    try:
+        import boto3
+    except ImportError:
+        return []
+    s3_client = boto3.client("s3")
+    prefix = f"{staging_prefix}/{family}/"
+    paginator = s3_client.get_paginator("list_objects_v2")
+    keys: list[str] = []
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            if key.endswith((".csv", ".txt")):
+                keys.append(f"s3://{bucket}/{key}")
+    return keys
+
+
+def _run_duckdb_analytics(
+    *,
+    bucket: str,
+    staging_prefix: str,
+    families: list[str],
+) -> dict[str, Any]:
+    """Run DuckDB aggregation queries over staged S3 CSVs. Returns a dict keyed by family."""
+    con = _duckdb_connect_with_s3(bucket)
+    result: dict[str, Any] = {}
+
+    if WATCHGUARD_TRAFFIC_LOG_TYPE in families:
+        files = _list_staging_csvs(bucket=bucket, staging_prefix=staging_prefix, family=WATCHGUARD_TRAFFIC_LOG_TYPE)
+        if files:
+            cols = ", ".join(f"column{i}" for i in range(len(_TRAFFIC_COLUMNS)))
+            names_sql = ", ".join(f"'{c}'" for c in _TRAFFIC_COLUMNS)
+            view_sql = (
+                f"CREATE OR REPLACE VIEW traffic_logs AS "
+                f"SELECT * FROM read_csv({files!r}, names=[{names_sql}], header=false, null_padding=true, ignore_errors=true)"
+            )
+            con.execute(view_sql)
+            traffic: dict[str, Any] = {}
+            traffic["total_rows"] = con.execute("SELECT COUNT(*) FROM traffic_logs").fetchone()[0]
+            traffic["action_counts"] = {
+                r[0]: r[1] for r in con.execute(
+                    "SELECT action, COUNT(*) as cnt FROM traffic_logs WHERE action IS NOT NULL "
+                    "GROUP BY action ORDER BY cnt DESC"
+                ).fetchall()
+            }
+            traffic["top_src_ips"] = [
+                {"src_ip": r[0], "count": r[1]} for r in con.execute(
+                    "SELECT src_ip, COUNT(*) as cnt FROM traffic_logs WHERE src_ip IS NOT NULL "
+                    "GROUP BY src_ip ORDER BY cnt DESC LIMIT 20"
+                ).fetchall()
+            ]
+            traffic["top_dst_ips"] = [
+                {"dst_ip": r[0], "count": r[1]} for r in con.execute(
+                    "SELECT dst_ip, COUNT(*) as cnt FROM traffic_logs WHERE dst_ip IS NOT NULL "
+                    "GROUP BY dst_ip ORDER BY cnt DESC LIMIT 20"
+                ).fetchall()
+            ]
+            traffic["top_src_dst_pairs"] = [
+                {"src_ip": r[0], "dst_ip": r[1], "count": r[2]} for r in con.execute(
+                    "SELECT src_ip, dst_ip, COUNT(*) as cnt FROM traffic_logs "
+                    "WHERE src_ip IS NOT NULL AND dst_ip IS NOT NULL "
+                    "GROUP BY src_ip, dst_ip ORDER BY cnt DESC LIMIT 20"
+                ).fetchall()
+            ]
+            traffic["protocol_breakdown"] = [
+                {"protocol": r[0], "count": r[1]} for r in con.execute(
+                    "SELECT protocol, COUNT(*) as cnt FROM traffic_logs WHERE protocol IS NOT NULL "
+                    "GROUP BY protocol ORDER BY cnt DESC LIMIT 10"
+                ).fetchall()
+            ]
+            traffic["deny_count"] = con.execute(
+                "SELECT COUNT(*) FROM traffic_logs WHERE lower(action) IN ('deny', 'denied', 'block', 'blocked')"
+            ).fetchone()[0]
+            time_range = con.execute(
+                "SELECT MIN(timestamp), MAX(timestamp) FROM traffic_logs WHERE timestamp IS NOT NULL"
+            ).fetchone()
+            traffic["time_range"] = {"min": time_range[0], "max": time_range[1]}
+            result[WATCHGUARD_TRAFFIC_LOG_TYPE] = traffic
+
+    if WATCHGUARD_ALARM_LOG_TYPE in families:
+        files = _list_staging_csvs(bucket=bucket, staging_prefix=staging_prefix, family=WATCHGUARD_ALARM_LOG_TYPE)
+        if files:
+            names_sql = ", ".join(f"'{c}'" for c in _ALARM_COLUMNS)
+            con.execute(
+                f"CREATE OR REPLACE VIEW alarm_logs AS "
+                f"SELECT * FROM read_csv({files!r}, names=[{names_sql}], header=false, null_padding=true, ignore_errors=true)"
+            )
+            alarm: dict[str, Any] = {}
+            alarm["total_rows"] = con.execute("SELECT COUNT(*) FROM alarm_logs").fetchone()[0]
+            alarm["alarm_type_counts"] = {
+                r[0]: r[1] for r in con.execute(
+                    "SELECT alarm_type, COUNT(*) as cnt FROM alarm_logs WHERE alarm_type IS NOT NULL "
+                    "GROUP BY alarm_type ORDER BY cnt DESC LIMIT 20"
+                ).fetchall()
+            }
+            time_range = con.execute(
+                "SELECT MIN(timestamp), MAX(timestamp) FROM alarm_logs WHERE timestamp IS NOT NULL"
+            ).fetchone()
+            alarm["time_range"] = {"min": time_range[0], "max": time_range[1]}
+            result[WATCHGUARD_ALARM_LOG_TYPE] = alarm
+
+    if WATCHGUARD_EVENT_LOG_TYPE in families:
+        files = _list_staging_csvs(bucket=bucket, staging_prefix=staging_prefix, family=WATCHGUARD_EVENT_LOG_TYPE)
+        if files:
+            names_sql = ", ".join(f"'{c}'" for c in _EVENT_COLUMNS)
+            con.execute(
+                f"CREATE OR REPLACE VIEW event_logs AS "
+                f"SELECT * FROM read_csv({files!r}, names=[{names_sql}], header=false, null_padding=true, ignore_errors=true)"
+            )
+            event: dict[str, Any] = {}
+            event["total_rows"] = con.execute("SELECT COUNT(*) FROM event_logs").fetchone()[0]
+            event["type_counts"] = {
+                r[0]: r[1] for r in con.execute(
+                    "SELECT type, COUNT(*) as cnt FROM event_logs WHERE type IS NOT NULL "
+                    "GROUP BY type ORDER BY cnt DESC LIMIT 10"
+                ).fetchall()
+            }
+            result[WATCHGUARD_EVENT_LOG_TYPE] = event
+
+    con.close()
+    return result
+
+
+def _run_duckdb_filtered_query(
+    *,
+    bucket: str,
+    staging_prefix: str,
+    family: str,
+    raw_filters: list[dict[str, Any]],
+    limit: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """Run a guarded DuckDB filter query and return (rows, matched_count)."""
+    allowed_fields = _DUCKDB_ALLOWED_FIELDS.get(family, set())
+    where_clauses: list[str] = []
+    for f in raw_filters:
+        field = f.get("field", "")
+        op = f.get("op", "eq")
+        value = f.get("value")
+        if field not in allowed_fields:
+            raise InvalidWatchGuardQueryError(
+                f"DuckDB query field '{field}' is not allowed for family '{family}'. "
+                f"Allowed: {', '.join(sorted(allowed_fields))}"
+            )
+        if op == "eq":
+            if not isinstance(value, str):
+                raise InvalidWatchGuardQueryError(f"Field '{field}' op 'eq' requires a string value")
+            safe_val = value.replace("'", "''")
+            where_clauses.append(f"lower({field}) = lower('{safe_val}')")
+        elif op == "in":
+            if not isinstance(value, list) or not value:
+                raise InvalidWatchGuardQueryError(f"Field '{field}' op 'in' requires a non-empty list")
+            safe_vals = ", ".join(f"lower('{str(v).replace(chr(39), chr(39)*2)}')" for v in value)
+            where_clauses.append(f"lower({field}) IN ({safe_vals})")
+        else:
+            raise InvalidWatchGuardQueryError(f"DuckDB query op '{op}' is not supported (use 'eq' or 'in')")
+
+    files = _list_staging_csvs(bucket=bucket, staging_prefix=staging_prefix, family=family)
+    if not files:
+        return [], 0
+
+    con = _duckdb_connect_with_s3(bucket)
+    columns = _FAMILY_COLUMNS.get(family, [])
+    names_sql = ", ".join(f"'{c}'" for c in columns) if columns else "'c0'"
+    view_name = f"{family}_logs_query"
+    con.execute(
+        f"CREATE OR REPLACE VIEW {view_name} AS "
+        f"SELECT * FROM read_csv({files!r}, names=[{names_sql}], header=false, null_padding=true, ignore_errors=true)"
+    )
+
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    matched_count = con.execute(f"SELECT COUNT(*) FROM {view_name} {where_sql}").fetchone()[0]
+    raw_rows = con.execute(
+        f"SELECT * FROM {view_name} {where_sql} LIMIT {limit}"
+    ).fetchall()
+    col_names = [desc[0] for desc in con.execute(f"DESCRIBE {view_name}").fetchall()]
+    rows = [dict(zip(col_names, row)) for row in raw_rows]
+    con.close()
+    return rows, matched_count

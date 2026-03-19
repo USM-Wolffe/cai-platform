@@ -10,6 +10,7 @@ def test_case_can_be_created_through_core_service_layer():
 
     case = create_case(
         case_repository,
+        client_id="test-client",
         workflow_type=WorkflowType.LOG_INVESTIGATION,
         title="Core-created case",
         summary="Created through platform-core.",
@@ -27,6 +28,7 @@ def test_artifact_ref_can_be_attached_explicitly():
 
     case = create_case(
         case_repository,
+        client_id="test-client",
         workflow_type=WorkflowType.LOG_INVESTIGATION,
         title="Attach artifact case",
         summary="Case for artifact attachment.",

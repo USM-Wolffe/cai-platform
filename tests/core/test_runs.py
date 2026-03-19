@@ -15,6 +15,7 @@ def test_runs_can_be_created_only_against_known_backends():
 
     case = create_case(
         case_repository,
+        client_id="test-client",
         workflow_type=WorkflowType.LOG_INVESTIGATION,
         title="Run case",
         summary="Case for run creation.",
@@ -39,6 +40,7 @@ def test_unsupported_workflow_backend_combinations_fail_clearly():
 
     case = create_case(
         case_repository,
+        client_id="test-client",
         workflow_type=WorkflowType.LOG_INVESTIGATION,
         title="Mismatch case",
         summary="Case for workflow mismatch.",

@@ -94,6 +94,7 @@ def test_backend_rejects_unsupported_workflow_clearly_through_core_run_creation(
 
     case = create_case(
         case_repository,
+        client_id="test-client",
         workflow_type=WorkflowType.LOG_INVESTIGATION,
         title="Unsupported workflow case",
         summary="Case to confirm workflow rejection.",
@@ -119,6 +120,7 @@ def test_demo_payload_triggers_expected_rules_and_high_risk_output():
 
     case = create_case(
         case_repository,
+        client_id="test-client",
         workflow_type=WorkflowType.DEFENSIVE_ANALYSIS,
         title="Phishing assessment case",
         summary="Case for phishing assessment.",
@@ -192,6 +194,7 @@ def test_benign_payload_returns_no_findings_deterministically():
 
     case = create_case(
         case_repository,
+        client_id="test-client",
         workflow_type=WorkflowType.DEFENSIVE_ANALYSIS,
         title="Benign phishing case",
         summary="Case for no-findings semantics.",
@@ -245,6 +248,7 @@ def test_invalid_payload_returns_normalized_failure_semantics():
 
     case = create_case(
         case_repository,
+        client_id="test-client",
         workflow_type=WorkflowType.DEFENSIVE_ANALYSIS,
         title="Invalid phishing case",
         summary="Case for invalid input.",

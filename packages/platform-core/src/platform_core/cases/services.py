@@ -27,6 +27,7 @@ from platform_core.ports import (
 def create_case(
     case_repository: CaseRepository,
     *,
+    client_id: str,
     workflow_type: WorkflowType,
     title: str,
     summary: str,
@@ -60,6 +61,7 @@ def create_case(
         current_stage_id = definition.stages[0].stage_id
 
     case = Case(
+        client_id=client_id,
         workflow_type=workflow_type,
         status=status,
         title=title,

@@ -3,10 +3,12 @@ PYTEST ?= $(PYTHON) -m pytest
 PLATFORM_API_BASE_URL ?= http://127.0.0.1:8000
 DEMO_WATCHGUARD_PAYLOAD ?= examples/watchguard/minimal_payload.json
 DEMO_PHISHING_EMAIL_PAYLOAD ?= examples/phishing/minimal_payload.json
+WATCHGUARD_S3_BUCKET ?= egslatam-cai-dev
+WATCHGUARD_S3_REGION ?= us-east-2
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install-dev build up down test test-apps api-dev health demo-watchguard demo-phishing-email
+.PHONY: help install-dev build up down test test-apps api-dev health demo-watchguard demo-phishing-email upload-workspace
 
 help:
 	@printf "Available targets:\n"
@@ -21,6 +23,7 @@ help:
 	@printf "  health       Check the platform-api health endpoint.\n"
 	@printf "  demo-watchguard  Run the baseline WatchGuard demo through the host-run orchestrator against platform-api. Requires apps/cai-orchestrator installed in the active Python env.\n"
 	@printf "  demo-phishing-email  Run the phishing email demo through the host-run orchestrator against platform-api. Requires apps/cai-orchestrator installed in the active Python env.\n"
+	@printf "  upload-workspace ZIP=<path/to/file.zip> WORKSPACE=<workspace_id>  Upload a WatchGuard workspace ZIP to S3. Example: make upload-workspace ZIP=8011029C760FA_8011029DE7578.zip WORKSPACE=8011029C760FA_8011029DE7578\n"
 
 install-dev:
 	$(PYTHON) -m pip install -e packages/platform-contracts
@@ -56,3 +59,15 @@ demo-watchguard:
 
 demo-phishing-email:
 	PLATFORM_API_BASE_URL='$(PLATFORM_API_BASE_URL)' $(PYTHON) -m cai_orchestrator run-phishing-email-basic-assessment --title "Phishing email demo case" --summary "Run the phishing email basic assessment slice." --payload-file '$(DEMO_PHISHING_EMAIL_PAYLOAD)'
+
+upload-workspace:
+	@if [ -z "$(ZIP)" ] || [ -z "$(WORKSPACE)" ]; then \
+		echo "Usage: make upload-workspace ZIP=<path/to/file.zip> WORKSPACE=<workspace_id>"; \
+		exit 1; \
+	fi
+	@UPLOAD_ID=$$(date +%Y%m%d_%H%M%S) && \
+	S3_KEY="workspaces/$(WORKSPACE)/input/uploads/$${UPLOAD_ID}/raw.zip" && \
+	echo "Uploading $(ZIP) to s3://$(WATCHGUARD_S3_BUCKET)/$${S3_KEY} ..." && \
+	aws s3 cp "$(ZIP)" "s3://$(WATCHGUARD_S3_BUCKET)/$${S3_KEY}" --region "$(WATCHGUARD_S3_REGION)" && \
+	echo "Done. workspace_id=$(WORKSPACE) upload_id=$${UPLOAD_ID}" && \
+	echo "S3 URI: s3://$(WATCHGUARD_S3_BUCKET)/$${S3_KEY}"

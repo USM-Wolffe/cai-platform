@@ -90,6 +90,7 @@ def test_platform_api_tool_service_calls_expected_endpoints(tmp_path):
 
     service.health()
     service.create_case(
+        client_id="test-client",
         workflow_type="log_investigation",
         title="Case",
         summary="Summary",
@@ -129,7 +130,7 @@ def test_platform_api_tool_service_calls_expected_endpoints(tmp_path):
         (
             "POST",
             "/cases",
-            {"workflow_type": "log_investigation", "title": "Case", "summary": "Summary", "metadata": {}},
+            {"client_id": "test-client", "workflow_type": "log_investigation", "title": "Case", "summary": "Summary", "metadata": {}},
         ),
         (
             "POST",
@@ -241,6 +242,10 @@ def test_build_platform_investigation_agent_exposes_expected_tool_surface(monkey
         "attach_input_artifact",
         "attach_workspace_s3_zip_reference",
         "create_run",
+        "find_latest_workspace_upload",
+        "execute_watchguard_stage_workspace_zip",
+        "execute_watchguard_duckdb_workspace_analytics",
+        "execute_watchguard_duckdb_workspace_query",
         "execute_watchguard_workspace_zip_ingestion",
         "execute_watchguard_normalize",
         "execute_watchguard_filter_denied",
@@ -289,6 +294,10 @@ def test_run_cai_terminal_cli_one_shot_uses_expected_settings_and_runner(monkeyp
         "attach_input_artifact",
         "attach_workspace_s3_zip_reference",
         "create_run",
+        "find_latest_workspace_upload",
+        "execute_watchguard_stage_workspace_zip",
+        "execute_watchguard_duckdb_workspace_analytics",
+        "execute_watchguard_duckdb_workspace_query",
         "execute_watchguard_workspace_zip_ingestion",
         "execute_watchguard_normalize",
         "execute_watchguard_filter_denied",

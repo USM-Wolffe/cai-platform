@@ -60,6 +60,9 @@ class InMemoryCaseRepository:
         self._cases[saved.case_id] = saved
         return saved.model_copy(deep=True)
 
+    def list_cases_by_client(self, client_id: str) -> list[Case]:
+        return [case.model_copy(deep=True) for case in self._cases.values() if case.client_id == client_id]
+
 
 class InMemoryArtifactRepository:
     def __init__(self) -> None:
@@ -171,11 +174,11 @@ class InMemoryAuditPort:
 
 @dataclass
 class AppRuntime:
-    """In-memory runtime bundle for the first deterministic API slice."""
+    """Runtime bundle — accepts either in-memory or PostgreSQL repository implementations."""
 
-    case_repository: InMemoryCaseRepository
-    artifact_repository: InMemoryArtifactRepository
-    run_repository: InMemoryRunRepository
+    case_repository: Any
+    artifact_repository: Any
+    run_repository: Any
     backend_registry: InProcessBackendRegistry
     approval_policy: DevelopmentApprovalPolicy
     audit_port: InMemoryAuditPort

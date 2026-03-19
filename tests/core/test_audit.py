@@ -11,6 +11,7 @@ def test_timeline_and_decision_log_appends_work_deterministically():
 
     case = create_case(
         case_repository,
+        client_id="test-client",
         workflow_type=WorkflowType.LOG_INVESTIGATION,
         title="Audit case",
         summary="Case for audit append testing.",

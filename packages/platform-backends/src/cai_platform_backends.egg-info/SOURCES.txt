@@ -10,6 +10,7 @@ src/platform_backends/phishing_email/__init__.py
 src/platform_backends/phishing_email/descriptor.py
 src/platform_backends/phishing_email/errors.py
 src/platform_backends/phishing_email/execute.py
+src/platform_backends/phishing_email/header_rules.py
 src/platform_backends/phishing_email/models.py
 src/platform_backends/watchguard_logs/__init__.py
 src/platform_backends/watchguard_logs/descriptor.py

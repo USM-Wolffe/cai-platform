@@ -17,6 +17,9 @@ class CaseRepository(Protocol):
     def save_case(self, case: Case) -> Case:
         """Persist and return the saved case."""
 
+    def list_cases_by_client(self, client_id: str) -> list[Case]:
+        """Return all cases belonging to a given client."""
+
 
 @runtime_checkable
 class ArtifactRepository(Protocol):

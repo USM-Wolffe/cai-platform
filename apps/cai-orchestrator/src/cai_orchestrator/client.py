@@ -60,6 +60,7 @@ class PlatformApiClient:
     def create_case(
         self,
         *,
+        client_id: str,
         workflow_type: str,
         title: str,
         summary: str,
@@ -69,6 +70,7 @@ class PlatformApiClient:
             "POST",
             "/cases",
             json={
+                "client_id": client_id,
                 "workflow_type": workflow_type,
                 "title": title,
                 "summary": summary,
@@ -194,6 +196,64 @@ class PlatformApiClient:
         return self._request(
             "POST",
             f"/runs/{run_id}/observations/watchguard-top-talkers-basic",
+            json=payload,
+        )
+
+    def execute_watchguard_stage_workspace_zip(
+        self,
+        *,
+        run_id: str,
+        requested_by: str,
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"requested_by": requested_by}
+        if input_artifact_id is not None:
+            payload["input_artifact_id"] = input_artifact_id
+        return self._request(
+            "POST",
+            f"/runs/{run_id}/observations/watchguard-stage-workspace-zip",
+            json=payload,
+        )
+
+    def execute_watchguard_duckdb_workspace_analytics(
+        self,
+        *,
+        run_id: str,
+        requested_by: str,
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"requested_by": requested_by}
+        if input_artifact_id is not None:
+            payload["input_artifact_id"] = input_artifact_id
+        return self._request(
+            "POST",
+            f"/runs/{run_id}/observations/watchguard-duckdb-workspace-analytics",
+            json=payload,
+        )
+
+    def execute_watchguard_duckdb_workspace_query(
+        self,
+        *,
+        run_id: str,
+        family: str,
+        filters: list[dict[str, Any]],
+        limit: int,
+        reason: str,
+        requested_by: str,
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "requested_by": requested_by,
+            "family": family,
+            "filters": filters,
+            "limit": limit,
+            "reason": reason,
+        }
+        if input_artifact_id is not None:
+            payload["input_artifact_id"] = input_artifact_id
+        return self._request(
+            "POST",
+            f"/runs/{run_id}/queries/watchguard-duckdb-workspace-query",
             json=payload,
         )
 

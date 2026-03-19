@@ -98,6 +98,9 @@ def test_backend_descriptor_declares_capabilities_deterministically():
         "watchguard_logs.analytics_bundle_basic",
         "watchguard_logs.top_talkers_basic",
         "watchguard_logs.guarded_filtered_rows",
+        "watchguard_logs.stage_workspace_zip",
+        "watchguard_logs.duckdb_workspace_analytics",
+        "watchguard_logs.duckdb_workspace_query",
     ]
     assert [kind.value for kind in descriptor.produced_artifact_kinds] == [
         "normalized",
@@ -121,6 +124,7 @@ def test_backend_rejects_unsupported_workflow_clearly_through_core_run_creation(
 
     case = create_case(
         case_repository,
+        client_id="test-client",
         workflow_type=WorkflowType.SANDBOX_INVESTIGATION,
         title="Unsupported workflow case",
         summary="Case to confirm workflow rejection.",
@@ -146,6 +150,7 @@ def test_predefined_observation_produces_normalized_artifact_and_valid_result():
 
     case = create_case(
         case_repository,
+        client_id="test-client",
         workflow_type=WorkflowType.LOG_INVESTIGATION,
         title="WatchGuard backend case",
         summary="Case for backend slice.",
@@ -200,6 +205,7 @@ def test_workspace_zip_ingestion_produces_manifest_and_family_artifacts(monkeypa
 
     case = create_case(
         case_repository,
+        client_id="test-client",
         workflow_type=WorkflowType.LOG_INVESTIGATION,
         title="Workspace ZIP ingestion case",
         summary="Case for S3 ZIP ingestion.",
@@ -290,6 +296,7 @@ def test_failure_paths_return_normalized_failure_semantics():
     backend_registry = StaticBackendRegistry()
     case = create_case(
         case_repository,
+        client_id="test-client",
         workflow_type=WorkflowType.LOG_INVESTIGATION,
         title="Failure semantics case",
         summary="Case for failure semantics.",
@@ -333,6 +340,7 @@ def test_filter_denied_events_produces_denied_only_artifact_and_valid_result():
 
     case = create_case(
         case_repository,
+        client_id="test-client",
         workflow_type=WorkflowType.LOG_INVESTIGATION,
         title="WatchGuard denied events case",
         summary="Case for denied event filtering.",
@@ -419,6 +427,7 @@ def test_realistic_watchguard_traffic_csv_payload_produces_normalized_artifact_a
 
     case = create_case(
         case_repository,
+        client_id="test-client",
         workflow_type=WorkflowType.LOG_INVESTIGATION,
         title="WatchGuard CSV ingest case",
         summary="Case for realistic traffic CSV ingest.",
@@ -491,6 +500,7 @@ def test_basic_analytics_bundle_produces_analysis_output_with_deterministic_rank
 
     case = create_case(
         case_repository,
+        client_id="test-client",
         workflow_type=WorkflowType.LOG_INVESTIGATION,
         title="WatchGuard analytics case",
         summary="Case for basic analytics bundle.",
@@ -604,6 +614,7 @@ def test_basic_analytics_bundle_returns_no_findings_and_empty_analysis_for_zero_
 
     case = create_case(
         case_repository,
+        client_id="test-client",
         workflow_type=WorkflowType.LOG_INVESTIGATION,
         title="WatchGuard zero analytics case",
         summary="Case for zero-record analytics.",
@@ -651,6 +662,7 @@ def test_basic_analytics_bundle_invalid_input_returns_normalized_failure_semanti
 
     case = create_case(
         case_repository,
+        client_id="test-client",
         workflow_type=WorkflowType.LOG_INVESTIGATION,
         title="WatchGuard analytics invalid case",
         summary="Case for invalid analytics input.",
@@ -697,6 +709,7 @@ def test_top_talkers_basic_produces_deterministic_analysis_output():
 
     case = create_case(
         case_repository,
+        client_id="test-client",
         workflow_type=WorkflowType.LOG_INVESTIGATION,
         title="WatchGuard top talkers case",
         summary="Case for the top talkers slice.",
@@ -812,6 +825,7 @@ def test_top_talkers_basic_returns_no_findings_and_empty_artifact_for_zero_recor
 
     case = create_case(
         case_repository,
+        client_id="test-client",
         workflow_type=WorkflowType.LOG_INVESTIGATION,
         title="WatchGuard zero top talkers case",
         summary="Case for zero-record top talkers.",
@@ -860,6 +874,7 @@ def test_top_talkers_basic_invalid_input_returns_normalized_failure_semantics():
 
     case = create_case(
         case_repository,
+        client_id="test-client",
         workflow_type=WorkflowType.LOG_INVESTIGATION,
         title="WatchGuard top talkers invalid case",
         summary="Case for invalid top talkers input.",
@@ -906,6 +921,7 @@ def test_guarded_custom_query_produces_query_result_with_deterministic_rows_and_
 
     case = create_case(
         case_repository,
+        client_id="test-client",
         workflow_type=WorkflowType.LOG_INVESTIGATION,
         title="WatchGuard guarded query case",
         summary="Case for the first guarded custom query slice.",
@@ -1076,6 +1092,7 @@ def test_guarded_custom_query_rejects_unsafe_query_shapes(query, error_message):
 
     case = create_case(
         case_repository,
+        client_id="test-client",
         workflow_type=WorkflowType.LOG_INVESTIGATION,
         title="Unsafe guarded query case",
         summary="Case for invalid guarded query validation.",

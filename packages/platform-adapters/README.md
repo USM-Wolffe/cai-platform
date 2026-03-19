@@ -1,42 +1,38 @@
 # platform-adapters
 
-Purpose:
-- Vendor and source translation layers.
+Capa de traducción entre fuentes externas y el formato interno de la plataforma.
 
-Owns:
-- Source-specific normalization, mapping, and translation helpers.
-- The current `platform_adapters.watchguard` slice for inspecting a WatchGuard input artifact and normalizing a small WatchGuard traffic CSV export wrapper into a backend-ready shape.
-- The current `platform_adapters.phishing_email` slice for validating and normalizing a structured email-like phishing assessment artifact.
+## Responsabilidad
 
-Must not own:
-- Canonical case state, backend lifecycle truth, or CAI-facing orchestration.
-- Backend descriptors, run coordination, persistence, service processes, or old `cai-project` topology.
+- Normalizar y validar payloads de entrada antes de que lleguen a los backends.
+- Aislar el conocimiento de formatos vendor-específicos (WatchGuard CSV, email SMTP) del dominio central.
 
-Relation:
-- Depends on shared contracts.
-- Can be used by backend implementations without turning the core into a vendor-shaped layer.
+**No debe contener**: lógica de casos, ciclo de vida de runs, código CAI, ni persistencia.
 
-Implemented now:
-- `platform_adapters.watchguard.errors`
-- `platform_adapters.watchguard.types`
-- `platform_adapters.watchguard.normalize`
-- `platform_adapters.phishing_email.errors`
-- `platform_adapters.phishing_email.types`
-- `platform_adapters.phishing_email.normalize`
+## Slices implementados
 
-Still intentionally absent:
-- full parser frameworks
-- S3/storage assumptions
-- executable services
-- old WatchGuard pipeline recreation
+### `platform_adapters.watchguard`
 
-Current WatchGuard slice notes:
-- Preferred realistic input path: JSON payload containing `{"log_type": "traffic", "csv_text" | "csv_rows"}`.
-- Compatibility path kept secondary for tests and transition safety: semantic `{"records": [...]}` payloads.
+Normaliza logs de firewall WatchGuard exportados desde el portal.
 
-Current phishing email slice notes:
-- Input path: JSON payload containing `subject`, `sender`, `reply_to`, `urls`, `text`, and `attachments`.
-- The adapter lowercases sender/reply-to emails and domains while preserving URLs and attachment metadata for deterministic backend execution.
+| Módulo | Descripción |
+|---|---|
+| `platform_adapters.watchguard.types` | Tipos: `WatchGuardRecord`, `WatchGuardNormalizedLog` |
+| `platform_adapters.watchguard.normalize` | Parser CSV → records normalizados. Acepta `{"log_type": "traffic", "csv_rows": [...]}` (preferido) y `{"records": [...]}` (compatibilidad) |
+| `platform_adapters.watchguard.errors` | `WatchGuardAdapterError` |
 
-Packaging note:
-- A minimal `pyproject.toml` is included so adapter code can be installed and tested independently while depending only on `cai-platform-contracts`.
+También provee `parse_workspace_s3_zip_reference()` para parsear el payload de tipo `workspace_s3_zip` que apunta a un ZIP en S3.
+
+### `platform_adapters.phishing_email`
+
+Valida y normaliza el payload de análisis de phishing.
+
+| Módulo | Descripción |
+|---|---|
+| `platform_adapters.phishing_email.types` | Tipos: `PhishingEmailInput`, `SenderInfo`, `AttachmentInfo` |
+| `platform_adapters.phishing_email.normalize` | Lowercasea emails/dominios, preserva URLs y metadata de adjuntos |
+| `platform_adapters.phishing_email.errors` | `PhishingEmailAdapterError` |
+
+## Regla de dependencias
+
+Solo puede depender de `platform-contracts`. Los backends importan desde aquí, no al revés.

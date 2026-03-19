@@ -21,6 +21,7 @@ def create_case_endpoint(
 ) -> dict[str, object]:
     case = create_case(
         runtime.case_repository,
+        client_id=request.client_id,
         workflow_type=request.workflow_type,
         title=request.title,
         summary=request.summary,

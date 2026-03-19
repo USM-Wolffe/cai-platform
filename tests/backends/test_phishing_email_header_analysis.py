@@ -99,7 +99,8 @@ def _run_header_analysis(payload: dict):
     registry = StaticBackendRegistry()
     artifact = make_input_artifact()
 
-    case = create_case(case_repo, workflow_type=WorkflowType.DEFENSIVE_ANALYSIS, title="T", summary="S")
+    case = create_case(case_repo, client_id="test-client",
+        workflow_type=WorkflowType.DEFENSIVE_ANALYSIS, title="T", summary="S")
     run = create_run_for_case(case_repo, run_repo, registry, audit, case_id=case.case_id, backend_id=PHISHING_EMAIL_BACKEND_ID)
     obs = ObservationRequest(
         case_ref=EntityRef(entity_type=EntityKind.CASE, id=case.case_id),
@@ -263,7 +264,8 @@ def test_header_analysis_fails_for_wrong_operation_kind():
     registry = StaticBackendRegistry()
     artifact = make_input_artifact()
 
-    case = create_case(case_repo, workflow_type=WorkflowType.DEFENSIVE_ANALYSIS, title="T", summary="S")
+    case = create_case(case_repo, client_id="test-client",
+        workflow_type=WorkflowType.DEFENSIVE_ANALYSIS, title="T", summary="S")
     run = create_run_for_case(case_repo, run_repo, registry, audit, case_id=case.case_id, backend_id=PHISHING_EMAIL_BACKEND_ID)
     obs = ObservationRequest(
         case_ref=EntityRef(entity_type=EntityKind.CASE, id=case.case_id),

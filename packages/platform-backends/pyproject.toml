@@ -13,6 +13,7 @@ dependencies = [
   "cai-platform-adapters>=0.1.0",
   "cai-platform-contracts>=0.1.0",
   "cai-platform-core>=0.1.0",
+  "duckdb>=1,<2",
 ]
 
 [project.optional-dependencies]

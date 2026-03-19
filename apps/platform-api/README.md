@@ -1,88 +1,117 @@
 # platform-api
 
-Purpose:
-- Current platform-facing app boundary for cases, artifacts, runs, observations, queries, and approvals.
+API HTTP determinista de cai-platform. Expone la superficie pública para gestión de casos, artefactos, runs, observaciones, queries y aprobaciones.
 
-Owns:
-- App composition, thin FastAPI routes, app-local in-memory runtime wiring, and the current deterministic HTTP surface for the platform.
+## Responsabilidad
 
-Must not own:
-- Core domain rules, backend implementation logic, or CAI orchestration behavior.
-- Real persistence engines, background jobs, authentication stacks, or old `cai-project` service topology.
+- Composición de la app FastAPI, rutas delgadas, y wiring del runtime.
+- Selecciona automáticamente PostgreSQL (producción) o memoria in-process (desarrollo/tests) según `DATABASE_URL`.
+- Registra múltiples backends en proceso: `watchguard_logs` y `phishing_email`.
 
-Relation:
-- Depends on `platform-core` and `platform-contracts`.
-- Should expose platform services without becoming the place where domain truth is invented.
+**No debe contener**: lógica de dominio, implementaciones de backend, código CAI, ni autenticación.
 
-Implemented now:
-- `platform_api.app` for app creation and the thin runtime entrypoint
-- `platform_api.routes.health`
-- `platform_api.routes.cases`
-- `platform_api.routes.runs`
-- `platform_api.routes.queries`
-- `platform_api.routes.artifacts`
-- `platform_api.runtime.memory`
-- `platform_api.runtime.wiring`
-- `platform_api.errors`
-- `platform_api.schemas`
+## Runtime
 
-Current endpoint surface:
-- `GET /health`
-- `POST /cases`
-- `GET /cases/{case_id}`
-- `POST /cases/{case_id}/artifacts/input`
-- `POST /runs`
-- `GET /runs/{run_id}`
-- `POST /runs/{run_id}/observations/watchguard-ingest-workspace-zip`
-- `POST /runs/{run_id}/observations/watchguard-normalize`
-- `POST /runs/{run_id}/observations/watchguard-filter-denied`
-- `POST /runs/{run_id}/observations/watchguard-analytics-basic`
-- `POST /runs/{run_id}/observations/watchguard-top-talkers-basic`
-- `POST /runs/{run_id}/observations/phishing-email-basic-assessment`
-- `POST /runs/{run_id}/queries/watchguard-guarded-filtered-rows`
-- `GET /runs/{run_id}/status`
-- `GET /runs/{run_id}/artifacts`
-- `GET /artifacts/{artifact_id}/content`
+```bash
+# Producción: corre en ECS Fargate detrás del ALB
+# URL: http://cai-platform-alb-*.us-east-2.elb.amazonaws.com
 
-Current WatchGuard input shape:
-- The preferred realistic input path keeps the API transport stable and sends a JSON payload that wraps a small WatchGuard traffic CSV export slice, for example `{"log_type": "traffic", "csv_rows": ["..."]}`.
-- The older semantic `{"records": [...]}` payload remains only as a secondary compatibility path for tests and transition safety.
+# Local (Docker):
+make up       # levanta en http://localhost:8000
+make health   # verifica el health check
+make down     # baja los contenedores
 
-Current phishing email input shape:
-- The phishing email slice keeps the same attach-artifact transport and expects a JSON payload shaped like:
-  `{"subject": "...", "sender": {"email": "...", "display_name": "..."}, "reply_to": null | {"email": "...", "display_name": "..."}, "urls": ["..."], "text": "...", "attachments": [{"filename": "...", "content_type": "..."}]}`
-- `reply_to` may be `null`, while `urls` and `attachments` stay explicit lists even when empty.
+# Local (sin Docker, para desarrollo):
+make api-dev  # uvicorn con hot-reload
+```
 
-Still intentionally absent:
-- CAI orchestration
-- real databases or object stores
-- generic SQL or free-form query execution
-- auth/authz
-- background workers
-- old `collector` / `analyzer` / `data-runner` style services
+## Variables de entorno
 
-Operational note:
-- The current readable-content contract is artifact-id based, not old path based.
-- The current guarded custom query contract is one explicit filtered-row query shape over normalized WatchGuard traffic rows. It requires an explicit approval decision and does not expose raw SQL or a generic query router.
-- For this runtime, input artifact content is the attached payload and derived artifact content is the backend-emitted payload stored alongside the artifact record.
-- If a future artifact exists without stored readable content, `GET /artifacts/{artifact_id}/content` should fail clearly rather than inventing content.
-- All observation endpoints share a single `ExecuteObservationRequest` shape (`requested_by`, optional `input_artifact_id`). Backend-specific request fields are added as dedicated schemas when a backend actually requires them.
-- Backend execution is dispatched through `AppRuntime.execute_observation()`. Routes pass `backend_id` and `operation_kind` as identifiers; they do not import or call backend execution functions directly. Adding a new backend requires registering its executor in `AppRuntime`, not modifying routes.
+| Variable | Default | Descripción |
+|---|---|---|
+| `PLATFORM_API_HOST` | `0.0.0.0` | Host de uvicorn |
+| `PLATFORM_API_PORT` | `8000` | Puerto de uvicorn |
+| `DATABASE_URL` | — | DSN PostgreSQL. Si no se define, usa memoria in-process |
 
-Runtime:
-- Run locally:
-  `python3 -m platform_api`
-- Console entrypoint:
-  `platform-api`
-- Environment variables:
-  - `PLATFORM_API_HOST` defaults to `0.0.0.0`
-  - `PLATFORM_API_PORT` defaults to `8000`
-- This is the only compose-managed and containerized app in this pass.
-- The root `compose.yml` runs only this service, and the current app-local runtime registers both `watchguard_logs` and `phishing_email` in process.
-- Quick health check:
-  `curl -i http://localhost:8000/health`
-  or
-  `make health`
+Si `DATABASE_URL` no está definida, el API usa `InMemoryCaseRepository`, `InMemoryArtifactRepository` e `InMemoryRunRepository`. En producción (ECS), `DATABASE_URL` se inyecta desde el task definition con credenciales de AWS Secrets Manager.
 
-Packaging note:
-- A minimal `pyproject.toml` is included so the app can be installed and tested independently with FastAPI and local in-memory runtime wiring only.
+## Módulos principales
+
+| Módulo | Descripción |
+|---|---|
+| `platform_api.app` | Creación de la app FastAPI y entrypoint |
+| `platform_api.routes.health` | `GET /health` |
+| `platform_api.routes.cases` | CRUD de casos (con `client_id` para multi-tenant) |
+| `platform_api.routes.runs` | Runs y todas las observaciones |
+| `platform_api.routes.queries` | Queries guarded y decisiones de aprobación |
+| `platform_api.routes.artifacts` | Lectura de artefactos y su contenido |
+| `platform_api.schemas` | Schemas Pydantic de request/response |
+| `platform_api.runtime.memory` | `AppRuntime`, repos in-memory, `AppRuntime.execute_observation()` |
+| `platform_api.runtime.postgres` | `PostgresCaseRepository`, `PostgresArtifactRepository`, `PostgresRunRepository`, schema bootstrap |
+| `platform_api.runtime.wiring` | `create_runtime()` — selecciona backend según `DATABASE_URL` |
+
+## Endpoints
+
+| Método | Ruta | Descripción |
+|---|---|---|
+| `GET` | `/health` | Health check |
+| `GET` | `/backends` | Listar backends |
+| `GET` | `/backends/{backend_id}` | Descriptor de un backend |
+| `POST` | `/cases` | Crear caso (`client_id` requerido) |
+| `GET` | `/cases/{case_id}` | Obtener caso |
+| `GET` | `/cases/{case_id}/artifacts` | Listar artefactos del caso |
+| `POST` | `/cases/{case_id}/artifacts` | Adjuntar artefacto de entrada |
+| `POST` | `/cases/{case_id}/runs` | Crear run |
+| `GET` | `/runs/{run_id}` | Obtener run |
+| `GET` | `/runs/{run_id}/artifacts` | Listar artefactos del run |
+| `GET` | `/artifacts/{artifact_id}` | Obtener artefacto |
+| `GET` | `/artifacts/{artifact_id}/content` | Leer contenido del artefacto |
+| `POST` | `/runs/{run_id}/observations/watchguard-normalize` | WatchGuard: normalizar logs |
+| `POST` | `/runs/{run_id}/observations/watchguard-filter-denied` | WatchGuard: filtrar denegados |
+| `POST` | `/runs/{run_id}/observations/watchguard-analytics-basic` | WatchGuard: analytics básico |
+| `POST` | `/runs/{run_id}/observations/watchguard-top-talkers-basic` | WatchGuard: top talkers |
+| `POST` | `/runs/{run_id}/observations/watchguard-ingest-workspace-zip` | WatchGuard: ingestión ZIP (en RAM) |
+| `POST` | `/runs/{run_id}/observations/watchguard-stage-workspace-zip` | WatchGuard: staging ZIP → S3 CSVs |
+| `POST` | `/runs/{run_id}/observations/watchguard-duckdb-workspace-analytics` | WatchGuard: analytics DuckDB sobre S3 |
+| `POST` | `/runs/{run_id}/observations/phishing-email-basic-assessment` | Phishing: evaluación básica |
+| `POST` | `/runs/{run_id}/observations/phishing-email-header-analysis` | Phishing: análisis de cabeceras |
+| `POST` | `/runs/{run_id}/queries/watchguard-guarded-filtered-rows` | Query guarded (requiere aprobación) |
+| `POST` | `/runs/{run_id}/queries/watchguard-duckdb-workspace-query` | Query DuckDB guarded (requiere aprobación) |
+| `POST` | `/approval-decisions` | Registrar decisión de aprobación |
+
+## Input shapes
+
+**WatchGuard (logs locales):**
+```json
+{"log_type": "traffic", "csv_rows": ["15/03/2026 00:00,,,,,ALLOW,allow-web,,TCP,,,10.0.0.1,51514,8.8.8.8,53,,,,,,,,traffic,dns-allow"]}
+```
+
+**WatchGuard (workspace S3 ZIP):**
+```json
+{"source": "workspace_s3_zip", "workspace": "8011029C760FA", "s3_uri": "s3://egslatam-cai-dev/workspaces/8011029C760FA/input/uploads/20251022_143055/raw.zip"}
+```
+
+**Phishing email:**
+```json
+{
+  "subject": "Urgent action required",
+  "sender": {"email": "attacker@example.com", "display_name": "Security"},
+  "reply_to": null,
+  "urls": ["http://malicious.example/login"],
+  "text": "Click here now.",
+  "attachments": [{"filename": "invoice.zip", "content_type": "application/zip"}]
+}
+```
+
+## Agregar un nuevo backend
+
+1. Implementar el backend en `packages/platform-backends/`
+2. Registrar su descriptor en `AppRuntime` dentro de `runtime/memory.py` y `runtime/wiring.py`
+3. Agregar el dispatch en `AppRuntime.execute_observation()`
+4. Agregar el endpoint en `routes/runs.py`
+
+No modificar las rutas para agregar lógica de backend — la lógica va en el backend, las rutas solo pasan `backend_id` y `operation_kind`.
+
+## Base de datos PostgreSQL
+
+El esquema se aplica automáticamente al iniciar con `apply_schema()` (idempotente). Ver [runtime/postgres.py](src/platform_api/runtime/postgres.py) para el SQL completo. Los datos se almacenan como JSONB para evitar migraciones de schema cuando los modelos Pydantic evolucionan.

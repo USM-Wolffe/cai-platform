@@ -20,6 +20,7 @@ def test_case_minimum_valid_model_construction():
     )
 
     case = Case(
+        client_id="egs-client-acme",
         workflow_type=WorkflowType.LOG_INVESTIGATION,
         status=CaseStatus.OPEN,
         title="Suspicious traffic investigation",

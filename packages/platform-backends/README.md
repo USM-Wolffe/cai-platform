@@ -1,61 +1,73 @@
 # platform-backends
 
-Purpose:
-- Deterministic backend implementations that satisfy the shared backend and run contracts.
+Implementaciones deterministas de backends para cai-platform. Cada backend es un caso de uso de ciberseguridad.
 
-Owns:
-- Concrete backend execution packages and backend conformance helpers.
-- The current `platform_backends.watchguard_logs` backend that exposes one descriptor, multiple predefined observation execution paths, and one guarded custom query path.
-- The current `platform_backends.phishing_email` backend that exposes one descriptor and one predefined phishing assessment observation.
+## Responsabilidad
 
-Must not own:
-- Canonical case semantics, CAI prompt/runtime code, or vendor-independent core contracts.
-- HTTP/process models, hidden persistence, old service topology recreation, or generalized plugin systems.
+- Implementar la lógica de investigación para cada backend (`watchguard_logs`, `phishing_email`).
+- Exponer descriptores (`BackendDescriptor`) con las operaciones disponibles y sus niveles de riesgo.
+- Ser completamente deterministas: misma entrada → mismo resultado.
 
-Relation:
-- Depends on `platform-contracts` and `platform-core`.
-- Uses adapters without redefining the platform around one vendor.
+**No debe contener**: lógica de casos, persistencia, código CAI, handlers HTTP, ni sistemas de plugins genéricos.
 
-Implemented now:
-- `platform_backends.watchguard_logs.descriptor`
-- `platform_backends.watchguard_logs.execute`
-- `platform_backends.watchguard_logs.errors`
-- `platform_backends.watchguard_logs.models`
-- `platform_backends.phishing_email.descriptor`
-- `platform_backends.phishing_email.execute`
-- `platform_backends.phishing_email.errors`
-- `platform_backends.phishing_email.models`
-- Four predefined observation paths in `platform_backends.watchguard_logs`:
-  - `watchguard_logs.normalize_and_summarize`
-  - `watchguard_logs.filter_denied_events`
-  - `watchguard_logs.analytics_bundle_basic`
-  - `watchguard_logs.top_talkers_basic`
-- One predefined observation path in `platform_backends.phishing_email`:
-  - `phishing_email.basic_assessment`
-- One guarded custom query path in `platform_backends.watchguard_logs`:
-  - `watchguard_logs.guarded_filtered_rows`
-- The backend descriptor now also declares practical operational capabilities for the migrated slices:
-  - `get_run_status`
-  - `list_run_artifacts`
-  - `read_artifact_content`
-- The phishing email slice is intentionally narrow:
-  - one explicit structured input artifact shape
-  - one local deterministic ruleset
-  - one `analysis_output` artifact with a structured summary
-  - no guarded query path, no internet lookups, and no generic rule-engine framework
-- The guarded custom query slice is intentionally narrow:
-  - allowlisted fields only: `src_ip`, `dst_ip`, `action`, `protocol`, `policy`
-  - allowlisted operators only: `eq`, `in`
-  - explicit result limit with a strict max
-  - explicit approval required through the platform contracts/core layer
-- The backend now consumes a realistic migrated WatchGuard traffic CSV ingest slice through the adapter, while still tolerating the older semantic records payload as a secondary compatibility path.
+## Backends implementados
 
-Still intentionally absent:
-- executable services
-- transport handlers
-- old `collector` / `analyzer` / `data-runner` replacement layers
-- storage engines
-- generic SQL, generic drilldown routers, and raw query consoles
+### `platform_backends.watchguard_logs`
 
-Packaging note:
-- A minimal `pyproject.toml` is included so backend code can be installed and tested independently while depending on `cai-platform-core`, `cai-platform-contracts`, and `cai-platform-adapters`.
+**backend_id**: `watchguard_logs` | **workflow_type**: `log_investigation`
+
+Analiza logs WatchGuard. Soporta logs locales (CSV en payload JSON) y workspace ZIPs grandes desde S3 (DuckDB httpfs, sin carga en RAM).
+
+| Módulo | Descripción |
+|---|---|
+| `watchguard_logs.descriptor` | `get_watchguard_logs_backend_descriptor()` — todas las operaciones declaradas |
+| `watchguard_logs.execute` | `execute_predefined_observation()` — dispatcher de operaciones |
+| `watchguard_logs.models` | Modelos internos del backend |
+| `watchguard_logs.errors` | Errores específicos del backend |
+
+**Operaciones**: `normalize_and_summarize`, `filter_denied_events`, `analytics_bundle_basic`, `top_talkers_basic`, `workspace_zip_ingestion`, `stage_workspace_zip`, `duckdb_workspace_analytics`, `guarded_filtered_rows` (guarded), `duckdb_workspace_query` (guarded).
+
+### `platform_backends.phishing_email`
+
+**backend_id**: `phishing_email` | **workflow_type**: `defensive_analysis`
+
+Analiza emails sospechosos usando reglas heurísticas deterministas. Sin lookups de internet.
+
+| Módulo | Descripción |
+|---|---|
+| `phishing_email.descriptor` | `get_phishing_email_backend_descriptor()` |
+| `phishing_email.execute` | `execute_predefined_observation()`, `execute_header_analysis_observation()` |
+| `phishing_email.models` | Modelos internos |
+| `phishing_email.errors` | Errores específicos |
+
+**Operaciones**: `basic_assessment`, `header_analysis`.
+
+## Patrón de implementación de un backend
+
+Cada backend debe implementar:
+
+```python
+# descriptor.py
+def get_<backend>_backend_descriptor() -> BackendDescriptor:
+    return BackendDescriptor(
+        backend_id=BACKEND_ID,
+        display_name="...",
+        supported_workflow_types=[WorkflowType.LOG_INVESTIGATION],
+        predefined_queries=[QueryDefinition(query_class="...", risk_class=RiskClass.LOW)],
+        ...
+    )
+
+# execute.py
+def execute_predefined_observation(
+    *, run: Run, input_artifact: Artifact,
+    input_payload: object, observation_request: ObservationRequest
+) -> object:
+    # lógica determinista → retorna payload del resultado
+    ...
+```
+
+Ver [docs/backends/README.md](../../docs/backends/README.md) para documentación completa de cada backend, shapes de input/output, y campos permitidos en queries.
+
+## Regla de dependencias
+
+Puede importar de `platform-contracts`, `platform-core`, y `platform-adapters`. No puede importar de `platform-api` ni de `cai-orchestrator`.

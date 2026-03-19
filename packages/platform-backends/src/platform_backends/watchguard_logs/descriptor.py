@@ -15,6 +15,9 @@ WATCHGUARD_LOGS_BACKEND_ID = "watchguard_logs"
 WATCHGUARD_LOGS_BACKEND_TYPE = "watchguard_logs"
 WATCHGUARD_WORKSPACE_ZIP_INGESTION_QUERY_CLASS = "watchguard_logs.workspace_zip_ingestion"
 WATCHGUARD_WORKSPACE_ZIP_INGESTION_OPERATION = "watchguard_logs.workspace_zip_ingestion"
+WATCHGUARD_STAGE_WORKSPACE_ZIP_OPERATION = "watchguard_logs.stage_workspace_zip"
+WATCHGUARD_DUCKDB_WORKSPACE_ANALYTICS_OPERATION = "watchguard_logs.duckdb_workspace_analytics"
+WATCHGUARD_DUCKDB_WORKSPACE_QUERY_CLASS = "watchguard_logs.duckdb_workspace_query"
 WATCHGUARD_ANALYTICS_BUNDLE_BASIC_QUERY_CLASS = "watchguard_logs.analytics_bundle_basic"
 WATCHGUARD_ANALYTICS_BUNDLE_BASIC_OPERATION = "watchguard_logs.analytics_bundle_basic"
 WATCHGUARD_FILTER_DENIED_EVENTS_QUERY_CLASS = "watchguard_logs.filter_denied_events"
@@ -65,6 +68,9 @@ def get_watchguard_logs_backend_descriptor() -> BackendDescriptor:
             WATCHGUARD_ANALYTICS_BUNDLE_BASIC_QUERY_CLASS,
             WATCHGUARD_TOP_TALKERS_BASIC_QUERY_CLASS,
             WATCHGUARD_GUARDED_FILTERED_ROWS_QUERY_CLASS,
+            WATCHGUARD_STAGE_WORKSPACE_ZIP_OPERATION,
+            WATCHGUARD_DUCKDB_WORKSPACE_ANALYTICS_OPERATION,
+            WATCHGUARD_DUCKDB_WORKSPACE_QUERY_CLASS,
         ],
         accepted_artifact_kinds=[ArtifactKind.INPUT],
         produced_artifact_kinds=[ArtifactKind.NORMALIZED, ArtifactKind.ANALYSIS_OUTPUT, ArtifactKind.QUERY_RESULT],

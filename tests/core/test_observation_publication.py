@@ -14,6 +14,7 @@ def test_observation_result_publication_updates_case_and_run_coordination():
 
     case = create_case(
         case_repository,
+        client_id="test-client",
         workflow_type=WorkflowType.LOG_INVESTIGATION,
         title="Observation case",
         summary="Case for observation publication.",

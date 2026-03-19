@@ -54,15 +54,18 @@ def build_egs_analist_agent(
 
     @function_tool(strict_mode=False)
     def create_case(
+        client_id: str,
         workflow_type: str,
         title: str,
         summary: str,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a new investigation case. Returns a case_id needed for subsequent steps.
+        client_id identifies the EGS client this case belongs to (required for multi-tenant isolation).
         workflow_type must be one of the platform-supported types (e.g. 'log_investigation', 'phishing_assessment').
         Always the first step of any investigation flow."""
         return service.create_case(
+            client_id=client_id,
             workflow_type=workflow_type,
             title=title,
             summary=summary,
@@ -208,6 +211,74 @@ def build_egs_analist_agent(
         )
 
     @function_tool(strict_mode=False)
+    def find_latest_workspace_upload(workspace_id: str) -> dict[str, Any]:
+        """Find the most recent raw.zip upload for a WatchGuard workspace in S3.
+        Returns found=True plus upload_id and s3_uri if an upload exists, or found=False otherwise.
+        Call this before staging a workspace to get the S3 URI of the latest ZIP."""
+        return service.find_latest_workspace_upload(workspace_id=workspace_id)
+
+    @function_tool(strict_mode=False)
+    def execute_watchguard_stage_workspace_zip(
+        run_id: str,
+        requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Stage a WatchGuard workspace ZIP from S3: downloads the ZIP, extracts TARs into individual CSVs, and uploads them to S3 staging/.
+        Input artifact must have source='workspace_s3_zip' with an s3_uri pointing to the raw.zip.
+        Returns a staging manifest artifact with staging_prefix, upload_id, families, file counts, and date range.
+        This is the first step of the S3-based large-scale log analysis pipeline — always call this before duckdb analytics."""
+        return service.execute_watchguard_stage_workspace_zip(
+            run_id=run_id,
+            requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
+        )
+
+    @function_tool(strict_mode=False)
+    def execute_watchguard_duckdb_workspace_analytics(
+        run_id: str,
+        requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Run DuckDB analytics over a staged WatchGuard workspace in S3. Reads CSVs directly from S3 via httpfs.
+        Input artifact must be the staging manifest artifact produced by execute_watchguard_stage_workspace_zip.
+        Returns aggregated analytics: top source/dest IPs, action counts, protocol breakdown, deny count, time range, alarm type counts.
+        Use this immediately after staging to get a high-level picture before drilling down with queries."""
+        return service.execute_watchguard_duckdb_workspace_analytics(
+            run_id=run_id,
+            requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
+        )
+
+    @function_tool(strict_mode=False)
+    def execute_watchguard_duckdb_workspace_query(
+        run_id: str,
+        family: str,
+        filters: list[dict[str, Any]],
+        limit: int = 50,
+        reason: str = "investigation drill-down",
+        requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Run a guarded DuckDB filter query over staged WatchGuard CSVs in S3. Returns up to `limit` matching rows (max 500).
+        Input artifact must be the staging manifest artifact from execute_watchguard_stage_workspace_zip.
+        family: 'traffic', 'alarm', or 'event'.
+        filters: list of {field, op, value} — allowed fields per family:
+          traffic: src_ip, dst_ip, action, protocol, policy, src_port, dst_port
+          alarm: alarm_type, src_ip, timestamp
+          event: type, timestamp
+        ops: '=', '!=', 'like', 'in', '>', '<', '>=', '<='.
+        Use this to drill into specific IPs, actions, alarm types, or time windows after reviewing analytics."""
+        return service.execute_watchguard_duckdb_workspace_query(
+            run_id=run_id,
+            family=family,
+            filters=filters,
+            limit=limit,
+            reason=reason,
+            requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
+        )
+
+    @function_tool(strict_mode=False)
     def execute_watchguard_guarded_custom_query(
         run_id: str,
         query: dict[str, Any],
@@ -272,9 +343,21 @@ def build_egs_analist_agent(
         instructions=(
             "You operate only through platform-api tools. Do not assume direct backend access, "
             "local backend state, or any legacy local service topology.\n\n"
-            "## WatchGuard log investigation\n"
-            "Use attach_input_artifact (for local files) or attach_workspace_s3_zip_reference (for S3 ZIPs), "
-            "then create_run with backend_id='watchguard_logs', then execute the appropriate observation.\n\n"
+            "## WatchGuard S3 workspace investigation (large-scale logs — PREFERRED PATH)\n"
+            "Use this flow when the operator provides a workspace_id or when analyzing SharePoint-sourced WatchGuard ZIPs:\n"
+            "1. find_latest_workspace_upload(workspace_id) → get s3_uri of the latest raw.zip\n"
+            "2. create_case(workflow_type='log_investigation', ...)\n"
+            "3. attach_workspace_s3_zip_reference(case_id, workspace=workspace_id, s3_uri=...) → artifact_id\n"
+            "4. create_run(case_id, backend_id='watchguard_logs', input_artifact_ids=[artifact_id]) → run_id\n"
+            "5. execute_watchguard_stage_workspace_zip(run_id) → staging manifest artifact (artifact_id_staging)\n"
+            "6. execute_watchguard_duckdb_workspace_analytics(run_id, input_artifact_id=artifact_id_staging) → analytics artifact\n"
+            "7. read_artifact_content(artifact_id) on the analytics artifact to understand the traffic picture\n"
+            "8. execute_watchguard_duckdb_workspace_query(run_id, family, filters, limit, input_artifact_id=artifact_id_staging) to drill into specific IPs/actions/alarms\n"
+            "IMPORTANT: always pass input_artifact_id=<staging_manifest_artifact_id> to steps 6 and 8 — "
+            "they read the staging prefix from that artifact, not from the run's original input.\n\n"
+            "## WatchGuard log investigation (legacy/local path)\n"
+            "Use attach_input_artifact (for local files), create_run with backend_id='watchguard_logs', "
+            "then execute_watchguard_normalize, execute_watchguard_analytics_basic, etc.\n\n"
             "## Phishing email investigation\n"
             "When the operator asks to investigate a phishing or suspicious email, follow EXACTLY these steps:\n"
             "1. create_case — MUST use workflow_type='defensive_analysis' (not 'phishing_assessment' or any other value)\n"
@@ -291,6 +374,10 @@ def build_egs_analist_agent(
             attach_input_artifact,
             attach_workspace_s3_zip_reference,
             create_run,
+            find_latest_workspace_upload,
+            execute_watchguard_stage_workspace_zip,
+            execute_watchguard_duckdb_workspace_analytics,
+            execute_watchguard_duckdb_workspace_query,
             execute_watchguard_workspace_zip_ingestion,
             execute_watchguard_normalize,
             execute_watchguard_filter_denied,

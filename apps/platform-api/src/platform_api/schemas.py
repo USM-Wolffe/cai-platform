@@ -15,6 +15,7 @@ class ApiModel(BaseModel):
 
 
 class CreateCaseRequest(ApiModel):
+    client_id: str = Field(min_length=1)
     workflow_type: WorkflowType
     title: str = Field(min_length=1)
     summary: str = Field(min_length=1)
@@ -54,6 +55,15 @@ class ExecuteWatchGuardGuardedCustomQueryRequest(ApiModel):
     reason: str = Field(min_length=1)
     query: dict[str, Any]
     approval: ApprovalDecisionInput | None = None
+
+
+class ExecuteWatchGuardDuckDBQueryRequest(ApiModel):
+    requested_by: str = Field(default="platform_api", min_length=1)
+    input_artifact_id: str | None = None
+    reason: str = Field(min_length=1)
+    family: str = Field(min_length=1, description="Log family: traffic, alarm, or event")
+    filters: list[dict[str, Any]] = Field(default_factory=list, description="List of {field, op, value} filter dicts")
+    limit: int = Field(default=50, ge=1, le=500)
 
 
 def serialize_run_status(*, run: Run, observation_results: list[ObservationResult]) -> dict[str, Any]:

@@ -1,141 +1,173 @@
 # cai-orchestrator
 
-Purpose:
-- CAI-facing orchestration app for operator interaction, tool wiring, and handoffs.
+CLI y app de orquestación CAI para cai-platform. Conecta los agentes de IA (CAI/Claude) con el API de la plataforma. Se ejecuta en el host, no está containerizado.
 
-Owns:
-- CAI integration code, a thin platform-api client, and the current thin orchestration flow/tool wrapper over the platform HTTP boundary.
-- Thin operational inspection calls over `platform-api` for run status, artifact listing, and artifact content.
+## Responsabilidad
 
-Must not own:
-- Canonical case persistence, backend implementation logic, or vendor/source adapter logic.
-- Vendored CAI source, backend execution, platform-core logic, or old `cai-project` runtime assumptions.
+- CLI para investigaciones WatchGuard y phishing.
+- Terminal CAI interactiva (`egs-analist` y sub-agentes especializados).
+- Monitor IMAP para phishing automatizado.
+- Cliente HTTP delgado sobre `platform-api`.
 
-Relation:
-- Depends on the platform through explicit interfaces.
-- CAI is an external dependency here, not vendored source.
+**No debe contener**: lógica de backends, persistencia canónica, código de vendor adaptado, ni estado interno de casos.
 
-Prerequisites for the official current operating model:
-- Python `3.12+`
-- `python3 -m pip`
-- a venv-friendly Python install on the host
-- a running `platform-api` endpoint, typically from the repo's Docker/Compose path
-- optional CAI extra only if you want `run-cai-terminal`
+## Instalación
 
-Implemented now:
-- `cai_orchestrator.client`
-- `cai_orchestrator.flows`
-- `cai_orchestrator.errors`
-- `cai_orchestrator.app` including the current thin CLI
-- `cai_orchestrator.config`
-- `cai_orchestrator.cai_tools`
-- `cai_orchestrator.cai_terminal` — egs-analist agent + phishing-investigator handoff
-- `cai_orchestrator.phishing_agents` — multi-agent phishing investigator pipeline (triage → specialists → synthesis)
-- `cai_orchestrator.email_bridge` — EML byte parsing to structured platform payload (stdlib only, no cross-layer imports)
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
 
-Current orchestration surface:
-- validate a tiny WatchGuard-style or phishing-email operator request
-- create case through `platform-api`
-- attach one input artifact through `platform-api`
-- create one run through `platform-api`
-- execute one of four predefined WatchGuard CLI observations (normalize, filter-denied, analytics-basic, top-talkers-basic), one guarded custom query, the phishing email basic assessment, or the phishing header analysis through `platform-api`
-- poll a Gmail/IMAP mailbox for forwarded phishing emails via `run-phishing-monitor`
-- optionally launch the CAI multi-agent phishing investigator after each monitored email (`--cai-investigate`)
-- return the structured result to the caller
+# Instalación base (CLI sin CAI)
+pip install -e apps/cai-orchestrator
 
-Note: the fifth WatchGuard observation (`watchguard-ingest-workspace-zip`) is available as a CAI terminal tool (`execute_watchguard_workspace_zip_ingestion`) but is not exposed as a standalone CLI subcommand. Use `run-cai-terminal` to drive workspace ZIP ingestion flows interactively.
+# Con soporte CAI (para run-cai-terminal)
+pip install -e 'apps/cai-orchestrator[cai]'
+```
 
-Still intentionally absent:
-- canonical state inside the orchestrator
-- backend logic
-- containerized runtime/deployment scaffolding
+## Variables de entorno
 
-Runtime:
-- This app is intentionally host-run in this pass. It is not containerized and is not present in the root `compose.yml`.
-- Install the baseline host-run CLI:
-  ```bash
-  python3 -m venv .venv
-  . .venv/bin/activate
-  python3 -m pip install --upgrade pip
-  python3 -m pip install -e apps/cai-orchestrator
-  ```
-- Optional CAI support:
-  ```bash
-  . .venv/bin/activate
-  python3 -m pip install -e 'apps/cai-orchestrator[cai]'
-  ```
-- Run the baseline WatchGuard slice locally:
-  `python3 -m cai_orchestrator run-watchguard --title "Minimal WatchGuard case" --summary "Drive the baseline WatchGuard slice" --payload-file path/to/payload.json`
-- Run the denied-event filter slice locally:
-  `python3 -m cai_orchestrator run-watchguard-filter-denied --title "Denied events case" --summary "Drive the denied-event filter slice" --payload-file path/to/payload.json`
-- Run the basic analytics bundle slice locally:
-  `python3 -m cai_orchestrator run-watchguard-analytics-basic --title "Analytics case" --summary "Drive the basic analytics bundle slice" --payload-file path/to/payload.json`
-- Run the basic top-talkers slice locally:
-  `python3 -m cai_orchestrator run-watchguard-top-talkers-basic --title "Top talkers case" --summary "Drive the basic top-talkers slice" --payload-file path/to/payload.json`
-- Run the guarded custom query slice locally:
-  `python3 -m cai_orchestrator run-watchguard-guarded-query --title "Guarded query case" --summary "Drive the guarded custom query slice" --payload-file path/to/payload.json --query-file examples/watchguard/guarded_query_src_ip.json --reason "Investigate one source IP." --approval-reason "Human approved this narrow guarded query."`
-- Run the phishing email basic assessment slice locally:
-  `python3 -m cai_orchestrator run-phishing-email-basic-assessment --title "Phishing email case" --summary "Drive the phishing email basic assessment slice" --payload-file path/to/payload.json`
-- Run the IMAP phishing monitor (one email, dry-run):
-  `python3 -m cai_orchestrator run-phishing-monitor --once --dry-run`
-- Run the IMAP phishing monitor with full CAI investigator:
-  `python3 -m cai_orchestrator run-phishing-monitor --once --cai-investigate --model "bedrock/anthropic.claude-sonnet-4-6"`
-- Run the IMAP phishing monitor continuously (default 60 s interval):
-  `python3 -m cai_orchestrator run-phishing-monitor`
-- Read run status locally:
-  `python3 -m cai_orchestrator get-run-status --run-id <run_id>`
-- List run artifacts locally:
-  `python3 -m cai_orchestrator list-run-artifacts --run-id <run_id>`
-- Read one artifact content locally:
-  `python3 -m cai_orchestrator read-artifact-content --artifact-id <artifact_id>`
-- Console entrypoint:
-  `cai-orchestrator run-watchguard --title "Minimal WatchGuard case" --summary "Drive the baseline WatchGuard slice" --payload-file path/to/payload.json`
-  or
-  `cai-orchestrator run-watchguard-filter-denied --title "Denied events case" --summary "Drive the denied-event filter slice" --payload-file path/to/payload.json`
-  or
-  `cai-orchestrator run-watchguard-analytics-basic --title "Analytics case" --summary "Drive the basic analytics bundle slice" --payload-file path/to/payload.json`
-  or
-  `cai-orchestrator run-watchguard-top-talkers-basic --title "Top talkers case" --summary "Drive the basic top-talkers slice" --payload-file path/to/payload.json`
-  or
-  `cai-orchestrator run-watchguard-guarded-query --title "Guarded query case" --summary "Drive the guarded custom query slice" --payload-file path/to/payload.json --query-file examples/watchguard/guarded_query_src_ip.json --reason "Investigate one source IP." --approval-reason "Human approved this narrow guarded query."`
-  or
-  `cai-orchestrator run-phishing-email-basic-assessment --title "Phishing email case" --summary "Drive the phishing email basic assessment slice" --payload-file path/to/payload.json`
-- The payload file must contain a JSON object compatible with the baseline WatchGuard slice, for example:
-  `{"log_type": "traffic", "csv_rows": ["15/03/2026 00:00,,,,,ALLOW,allow-web,,TCP,,,10.0.0.1,51514,8.8.8.8,53,,,,,,,,traffic,dns-allow"]}`
-- The phishing email payload file must contain a JSON object compatible with the phishing slice, for example:
-  `{"subject": "Urgent action required: verify now", "sender": {"email": "security.alerts@gmail.com", "display_name": "Security Support"}, "reply_to": {"email": "billing@corp-payments.example", "display_name": "Billing Desk"}, "urls": ["http://198.51.100.7/login?verify=1"], "text": "Immediately update your account. Payment required today to avoid suspension.", "attachments": [{"filename": "invoice.zip", "content_type": "application/zip"}]}`
-- The older semantic `{"records": [...]}` payload still works as a secondary compatibility path, but the preferred demo and migration slice now uses the realistic WatchGuard traffic CSV wrapper.
-- Environment variable:
-  - `PLATFORM_API_BASE_URL` defaults to `http://127.0.0.1:8000`
-- Demo payload in this repo:
-  `examples/watchguard/minimal_payload.json`
-- Demo guarded query in this repo:
-  `examples/watchguard/guarded_query_src_ip.json`
-- Demo phishing email payload in this repo:
-  `examples/phishing/minimal_payload.json`
-- Fastest demo path:
-  `make demo-watchguard`
-- Fast phishing demo path:
-  `make demo-phishing-email`
-- Minimal CAI terminal path:
-  `python3 -m cai_orchestrator run-cai-terminal`
-- One-shot CAI prompt path:
-  `python3 -m cai_orchestrator run-cai-terminal --prompt "Check health, create a case, attach examples/watchguard/minimal_payload.json, create a run, execute watchguard_logs.analytics_bundle_basic, then execute a guarded filtered query for src_ip 10.0.0.1 with human approval, then show the final run."`
-  or
-  `python3 -m cai_orchestrator run-cai-terminal --prompt "Check health, create a defensive_analysis case, attach examples/phishing/minimal_payload.json, create a run for phishing_email, execute phishing_email.basic_assessment, then show the final run."`
-- The CAI terminal tool surface (egs-analist) includes: `health`, `create_case`, `attach_input_artifact`, `attach_workspace_s3_zip_reference`, `create_run`, `execute_watchguard_workspace_zip_ingestion`, `execute_watchguard_normalize`, `execute_watchguard_filter_denied`, `execute_watchguard_analytics_basic`, `execute_watchguard_top_talkers_basic`, `execute_phishing_email_basic_assessment`, `execute_watchguard_guarded_custom_query`, `get_case`, `get_run`, `get_run_status`, `list_run_artifacts`, `read_artifact_content`. Each tool carries a docstring that the LLM uses to reason about when and how to call it.
-- egs-analist also supports handing off to the phishing-investigator pipeline. Tell it "investigate this phishing email" with a run_id and it delegates automatically.
-- Supported `CAI_AGENT_TYPE` values: `egs-analist` (default), `platform_investigation_agent` (alias), `phishing_investigator_agent` (direct phishing pipeline entry).
-- Only `make demo-watchguard` and `make demo-phishing-email` exist as Makefile shorthands. The rest of the runtime surface stays explicit through the CLI commands above.
-- CAI is optional for this app. The baseline WatchGuard and phishing CLI flows do not require the CAI extra.
-- AWS CLI and MCP are not required for the current local stack.
-- Useful env names carried forward from old operator ergonomics:
-  - `PLATFORM_API_BASE_URL`
-  - `CAI_AGENT_TYPE` — canonical value is `egs-analist` (default); `platform_investigation_agent` is accepted as a legacy alias. Both resolve to the same agent.
-  - `CAI_MODEL` (optional pass-through to the external CAI SDK)
-- `.env.example` at the repo root documents the minimal supported env surface.
-- Those values are not auto-loaded in this pass; export them in the shell or pass `--api-base-url` directly.
+| Variable | Default | Descripción |
+|---|---|---|
+| `PLATFORM_API_BASE_URL` | `http://127.0.0.1:8000` | URL del platform-api |
+| `CAI_MODEL` | — | Modelo Bedrock, ej. `bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0` |
+| `CAI_AGENT_TYPE` | `egs-analist` | Tipo de agente CAI |
 
-Packaging note:
-- A minimal `pyproject.toml` is included. `httpx` is a normal dependency for the platform-api client.
-- CAI is declared only as an optional external dependency via the `cai` extra. No CAI source is vendored in this repo.
+## Comandos CLI
+
+Todos los comandos requieren `--client-id` para aislamiento multi-tenant.
+
+### WatchGuard
+
+```bash
+# Normalización y resumen
+python3 -m cai_orchestrator run-watchguard \
+  --client-id "cliente-abc" \
+  --title "Logs enero" \
+  --summary "Analizar tráfico denegado." \
+  --payload-file examples/watchguard/minimal_payload.json
+
+# Filtrar eventos denegados
+python3 -m cai_orchestrator run-watchguard-filter-denied \
+  --client-id "cliente-abc" --title "..." --summary "..." --payload-file ...
+
+# Analytics básico
+python3 -m cai_orchestrator run-watchguard-analytics-basic \
+  --client-id "cliente-abc" --title "..." --summary "..." --payload-file ...
+
+# Top talkers
+python3 -m cai_orchestrator run-watchguard-top-talkers-basic \
+  --client-id "cliente-abc" --title "..." --summary "..." --payload-file ...
+
+# Query guarded (requiere aprobación)
+python3 -m cai_orchestrator run-watchguard-guarded-query \
+  --client-id "cliente-abc" \
+  --title "Query guarded" \
+  --summary "Investigar IP específica." \
+  --payload-file examples/watchguard/minimal_payload.json \
+  --query-file examples/watchguard/guarded_query_src_ip.json \
+  --reason "Investigar src_ip 10.0.0.1" \
+  --approval-reason "Analista aprobó."
+```
+
+### Phishing
+
+```bash
+python3 -m cai_orchestrator run-phishing-email-basic-assessment \
+  --client-id "cliente-abc" \
+  --title "Email sospechoso" \
+  --summary "Verificar si es phishing." \
+  --payload-file examples/phishing/minimal_payload.json
+```
+
+### Monitor IMAP
+
+```bash
+# Dry-run (un email, sin marcarlo como leído)
+python3 -m cai_orchestrator run-phishing-monitor \
+  --client-id "cliente-abc" --once --dry-run
+
+# Procesar un email + investigación CAI completa
+python3 -m cai_orchestrator run-phishing-monitor \
+  --client-id "cliente-abc" --once --cai-investigate \
+  --model "bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0"
+
+# Loop continuo (intervalo por defecto: 60 s)
+python3 -m cai_orchestrator run-phishing-monitor --client-id "cliente-abc"
+```
+
+### Terminal CAI interactiva
+
+```bash
+# Modo interactivo (el agente pide input)
+python3 -m cai_orchestrator run-cai-terminal \
+  --client-id "cliente-abc" \
+  --model "bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0"
+
+# One-shot con prompt
+python3 -m cai_orchestrator run-cai-terminal \
+  --client-id "cliente-abc" \
+  --model "bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0" \
+  --prompt "Analiza el workspace 8011029C760FA. Estágealo, corre analytics y muéstrame los top IPs denegados."
+```
+
+### Inspección de runs y artefactos
+
+```bash
+python3 -m cai_orchestrator get-run-status --run-id <run_id>
+python3 -m cai_orchestrator list-run-artifacts --run-id <run_id>
+python3 -m cai_orchestrator read-artifact-content --artifact-id <artifact_id>
+```
+
+## Agentes CAI disponibles
+
+| `CAI_AGENT_TYPE` | Descripción |
+|---|---|
+| `egs-analist` (default) | Agente general. Puede delegar a phishing-investigator. |
+| `platform_investigation_agent` | Alias de `egs-analist` |
+| `phishing_investigator_agent` | Entra directamente al pipeline multi-agente de phishing |
+
+### Herramientas disponibles en `egs-analist`
+
+**Core**: `health`, `create_case`, `attach_input_artifact`, `attach_workspace_s3_zip_reference`, `create_run`
+
+**Pipeline S3**: `find_latest_workspace_upload`, `execute_watchguard_stage_workspace_zip`, `execute_watchguard_duckdb_workspace_analytics`, `execute_watchguard_duckdb_workspace_query`
+
+**WatchGuard clásico**: `execute_watchguard_workspace_zip_ingestion`, `execute_watchguard_normalize`, `execute_watchguard_filter_denied`, `execute_watchguard_analytics_basic`, `execute_watchguard_top_talkers_basic`, `execute_watchguard_guarded_custom_query`
+
+**Phishing**: `execute_phishing_email_basic_assessment`
+
+**Inspección**: `get_case`, `get_run`, `get_run_status`, `list_run_artifacts`, `read_artifact_content`
+
+## Pipeline multi-agente de phishing
+
+```
+phishing-triage
+  ├─ execute_phishing_email_basic_assessment
+  ├─ read_artifact_content
+  └─ handoff según señales:
+       phishing-url-specialist        → phishing-synthesis
+       phishing-header-specialist     → phishing-synthesis
+       phishing-attachment-specialist → phishing-synthesis
+       (sin señales)                  → phishing-synthesis
+
+phishing-synthesis → veredicto JSON
+```
+
+## Módulos principales
+
+| Módulo | Descripción |
+|---|---|
+| `cai_orchestrator.app` | CLI (argparse), entrypoint |
+| `cai_orchestrator.client` | Cliente HTTP sobre `platform-api` |
+| `cai_orchestrator.flows` | Flows de investigación (WatchGuard, phishing) |
+| `cai_orchestrator.cai_terminal` | Agente `egs-analist` y herramientas CAI |
+| `cai_orchestrator.phishing_agents` | Pipeline multi-agente de phishing |
+| `cai_orchestrator.cai_tools` | `PlatformApiToolService` — wrapper del cliente para herramientas CAI |
+| `cai_orchestrator.email_bridge` | Parser EML → payload de plataforma (stdlib, sin imports cross-layer) |
+| `cai_orchestrator.config` | Configuración desde env vars |
+
+## Notas
+
+- Los flujos S3 (`stage_workspace_zip`, `duckdb_workspace_analytics`, `duckdb_workspace_query`) no tienen subcomandos CLI propios — se usan exclusivamente desde la terminal CAI.
+- CAI no está vendorizado en este repo; se importa como dependencia opcional.
+- No requiere Docker. No está en `compose.yml`.

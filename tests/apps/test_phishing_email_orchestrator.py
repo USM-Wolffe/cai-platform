@@ -97,6 +97,7 @@ def test_phishing_email_orchestration_flow_performs_the_correct_ordered_api_call
 
     result = app.start_phishing_email_basic_assessment(
         PhishingEmailAssessmentRequest(
+            client_id="test-client",
             title="Case",
             summary="Summary",
             payload=_make_demo_payload(),
@@ -129,6 +130,7 @@ def test_orchestrator_can_drive_the_real_phishing_email_vertical_slice():
 
     result = app.start_phishing_email_basic_assessment(
         PhishingEmailAssessmentRequest(
+            client_id="test-client",
             title="CAI phishing case",
             summary="Drive the phishing slice through platform-api.",
             payload=_make_demo_payload(),
@@ -172,6 +174,8 @@ def test_orchestrator_cli_runs_the_phishing_email_basic_assessment_flow(tmp_path
     exit_code = cai_orchestrator.run_cli(
         [
             "run-phishing-email-basic-assessment",
+            "--client-id",
+            "test-client",
             "--title",
             "CLI phishing case",
             "--summary",

@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from typing import Any
 
+import boto3
+
 from cai_orchestrator.client import PlatformApiClient
+
+_S3_BUCKET = os.environ.get("WATCHGUARD_S3_BUCKET", "egslatam-cai-dev")
+_S3_REGION = os.environ.get("AWS_DEFAULT_REGION", "us-east-2")
 
 
 @dataclass
@@ -21,12 +27,14 @@ class PlatformApiToolService:
     def create_case(
         self,
         *,
+        client_id: str,
         workflow_type: str,
         title: str,
         summary: str,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self.platform_api_client.create_case(
+            client_id=client_id,
             workflow_type=workflow_type,
             title=title,
             summary=summary,
@@ -156,6 +164,75 @@ class PlatformApiToolService:
     ) -> dict[str, Any]:
         return self.platform_api_client.execute_watchguard_top_talkers_basic(
             run_id=run_id,
+            requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
+        )
+
+    def find_latest_workspace_upload(
+        self,
+        *,
+        workspace_id: str,
+        bucket: str = _S3_BUCKET,
+        region: str = _S3_REGION,
+    ) -> dict[str, Any]:
+        """Return the S3 URI of the most recent raw.zip for the given workspace."""
+        s3 = boto3.client("s3", region_name=region)
+        prefix = f"workspaces/{workspace_id}/input/uploads/"
+        paginator = s3.get_paginator("list_objects_v2")
+        upload_ids: list[str] = []
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix, Delimiter="/"):
+            for cp in page.get("CommonPrefixes", []):
+                p = cp["Prefix"].rstrip("/")
+                upload_ids.append(p.split("/")[-1])
+        if not upload_ids:
+            return {"found": False, "workspace_id": workspace_id}
+        latest = sorted(upload_ids)[-1]
+        s3_uri = f"s3://{bucket}/workspaces/{workspace_id}/input/uploads/{latest}/raw.zip"
+        return {"found": True, "workspace_id": workspace_id, "upload_id": latest, "s3_uri": s3_uri}
+
+    def execute_watchguard_stage_workspace_zip(
+        self,
+        *,
+        run_id: str,
+        requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.platform_api_client.execute_watchguard_stage_workspace_zip(
+            run_id=run_id,
+            requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
+        )
+
+    def execute_watchguard_duckdb_workspace_analytics(
+        self,
+        *,
+        run_id: str,
+        requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.platform_api_client.execute_watchguard_duckdb_workspace_analytics(
+            run_id=run_id,
+            requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
+        )
+
+    def execute_watchguard_duckdb_workspace_query(
+        self,
+        *,
+        run_id: str,
+        family: str,
+        filters: list[dict[str, Any]],
+        limit: int = 50,
+        reason: str,
+        requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.platform_api_client.execute_watchguard_duckdb_workspace_query(
+            run_id=run_id,
+            family=family,
+            filters=filters,
+            limit=limit,
+            reason=reason,
             requested_by=requested_by,
             input_artifact_id=input_artifact_id,
         )

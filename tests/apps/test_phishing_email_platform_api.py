@@ -9,7 +9,8 @@ def _create_phishing_case_run(client, payload):
     case_id = client.post(
         "/cases",
         json={
-            "workflow_type": "defensive_analysis",
+            "client_id": "test-client",
+                "workflow_type": "defensive_analysis",
             "title": "Phishing query case",
             "summary": "Case for phishing assessment execution.",
         },
