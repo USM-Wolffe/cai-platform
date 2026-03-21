@@ -12,18 +12,23 @@
 4. [Prerequisitos](#prerequisitos)
 5. [Instalación rápida](#instalación-rápida)
 6. [Variables de entorno](#variables-de-entorno)
-7. [Cómo usar la plataforma](#cómo-usar-la-plataforma)
+7. [Interfaz web (Streamlit UI)](#interfaz-web-streamlit-ui)
+   - [Instalación](#instalación-de-la-ui)
+   - [Tab 1 — WatchGuard S3 Investigation](#tab-1--watchguard-s3-investigation)
+   - [Tab 2 — Phishing Investigation](#tab-2--phishing-investigation)
+   - [Tab 3 — Monitor de Email (IMAP)](#tab-3--monitor-de-email-imap)
+8. [Cómo usar la plataforma (CLI)](#cómo-usar-la-plataforma)
    - [CLI del orquestador](#cli-del-orquestador)
    - [Terminal CAI interactiva](#terminal-cai-interactiva)
    - [Monitor IMAP de phishing](#monitor-imap-de-phishing)
    - [API HTTP directa](#api-http-directa)
-8. [Pipeline WatchGuard S3 (logs a escala)](#pipeline-watchguard-s3-logs-a-escala)
-9. [Investigador multi-agente de phishing](#investigador-multi-agente-de-phishing)
-10. [Despliegue en producción (AWS)](#despliegue-en-producción-aws)
-11. [Desarrollo y tests](#desarrollo-y-tests)
-12. [Cómo agregar un nuevo backend](#cómo-agregar-un-nuevo-backend)
-13. [Referencia de endpoints](#referencia-de-endpoints)
-14. [Recursos AWS](#recursos-aws)
+9. [Pipeline WatchGuard S3 (logs a escala)](#pipeline-watchguard-s3-logs-a-escala)
+10. [Investigador multi-agente de phishing](#investigador-multi-agente-de-phishing)
+11. [Despliegue en producción (AWS)](#despliegue-en-producción-aws)
+12. [Desarrollo y tests](#desarrollo-y-tests)
+13. [Cómo agregar un nuevo backend](#cómo-agregar-un-nuevo-backend)
+14. [Referencia de endpoints](#referencia-de-endpoints)
+15. [Recursos AWS](#recursos-aws)
 
 ---
 
@@ -39,15 +44,16 @@
 **Flujo típico de un analista:**
 
 ```
-Analista → CAI Terminal / CLI
-              ↓
-        Platform API (HTTP)
-              ↓
-        Backend (watchguard_logs / phishing_email / ...)
-              ↓
-        Resultado determinista + artefactos
-              ↓
-        Analista revisa
+Analista → Streamlit UI  ─────────────────┐
+         → CAI Terminal / CLI             │
+                                          ↓
+                                    Platform API (HTTP)
+                                          ↓
+                                    Backend (watchguard_logs / phishing_email / ...)
+                                          ↓
+                                    Resultado determinista + artefactos
+                                          ↓
+                                    Analista revisa
 ```
 
 ---
@@ -101,7 +107,8 @@ S3 (egslatam-cai-dev)
 cai-platform/
 ├── apps/
 │   ├── platform-api/          # API HTTP (FastAPI + uvicorn)
-│   └── cai-orchestrator/      # CLI + agentes CAI
+│   ├── cai-orchestrator/      # CLI + agentes CAI
+│   └── platform-ui/           # Interfaz web Streamlit
 ├── packages/
 │   ├── platform-contracts/    # Modelos Pydantic compartidos
 │   ├── platform-core/         # Puertos y servicios neutros
@@ -193,6 +200,169 @@ Copiar `.env.example` → `.env` y completar:
 | `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` | Solo API en producción | Datos de conexión RDS |
 
 > **Nota sobre `DATABASE_URL`**: El API selecciona automáticamente PostgreSQL si `DATABASE_URL` está definido, o memoria in-process si no. En producción (ECS), esta variable viene del task definition con las credenciales desde Secrets Manager.
+
+---
+
+## Interfaz web (Streamlit UI)
+
+`platform-ui` es una interfaz web que envuelve el orquestador y elimina la fricción de la CLI. No reemplaza el CLI ni el API — es una capa de presentación pura que llama a los mismos flujos internamente.
+
+### Instalación de la UI
+
+```bash
+# Sin soporte CAI (solo pipeline determinista)
+make install-ui
+
+# Con soporte CAI (habilita chat de seguimiento y pipeline multi-agente)
+make install-ui-cai
+```
+
+Luego lanzar:
+
+```bash
+make ui
+# Abre automáticamente http://localhost:8501
+```
+
+La UI lee las mismas variables de entorno que el CLI (`PLATFORM_API_BASE_URL`, `CAI_MODEL`, `AWS_*`, `IMAP_*`). Todos los campos también son editables desde el **panel lateral** sin necesidad de reiniciar.
+
+---
+
+### Tab 1 — WatchGuard S3 Investigation
+
+Permite subir un ZIP de logs WatchGuard (exportado desde SharePoint), staging en S3 y obtener analytics sin tocar la CLI.
+
+**Pasos:**
+
+1. En el panel lateral, completar:
+   - **AWS Access Key ID** y **Secret** (o dejar vacíos para usar `~/.aws/credentials`)
+   - **S3 Bucket** y **Región** (defaults: `egslatam-cai-dev` / `us-east-2`)
+   - **Client ID** (para aislamiento multi-tenant)
+
+2. En el tab **WatchGuard S3 Investigation**:
+   - **Subir el ZIP** con el uploader. El Workspace ID se auto-detecta desde el nombre del archivo.
+   - Verificar o editar el Workspace ID manualmente si es necesario.
+   - Escribir una pregunta de investigación opcional (usada para orientar al agente CAI en el chat).
+   - Click en **Investigar**.
+
+3. La UI ejecuta automáticamente:
+   ```
+   upload ZIP → S3
+   create_case → attach_artifact → create_run
+   stage_workspace_zip   → CSVs en S3 staging
+   duckdb_workspace_analytics → agregaciones
+   ```
+
+4. Se muestran tablas con: top IPs origen/destino, distribución de acciones, protocolos, tipos de alarma, rango de fechas y conteo de eventos DENY.
+
+5. Si CAI está instalado, aparece un **chat de seguimiento** debajo de las tablas. El analista puede hacer preguntas en lenguaje natural y el agente `egs-analist` usa las herramientas de la plataforma para responderlas.
+
+**Ejemplo de pregunta de chat:**
+```
+¿Cuáles son los 5 destinos más frecuentes de la IP 10.0.0.55?
+```
+
+---
+
+### Tab 2 — Phishing Investigation
+
+Analiza un email sospechoso individual. Soporta dos modos de entrada:
+
+**Modo A — Subir archivo `.eml`**
+
+Subir el archivo `.eml` exportado desde el cliente de correo. La UI parsea los headers, URLs, adjuntos y cuerpo automáticamente.
+
+**Modo B — Pegar payload JSON**
+
+Para integraciones o pruebas, pegar directamente el JSON con la estructura:
+
+```json
+{
+  "subject": "Urgent: verify your account",
+  "sender": {"email": "attacker@example.com", "display_name": "Security"},
+  "reply_to": null,
+  "urls": ["http://198.51.100.7/login?verify=1"],
+  "text": "Click here immediately to avoid suspension.",
+  "attachments": []
+}
+```
+
+**Flujo de análisis:**
+
+1. Se muestra un preview del payload parseado.
+2. Click en **Investigar**.
+3. El backend corre las reglas heurísticas y muestra: `risk_level`, `risk_score`, reglas activadas, señales de URLs y adjuntos.
+4. Si CAI está instalado y se activa el checkbox **"Correr pipeline multi-agente CAI"**, el agente `phishing_investigator` corre el pipeline completo (triage → especialistas → síntesis) y agrega el veredicto estructurado:
+
+| Campo | Valores posibles |
+|---|---|
+| `overall_verdict` | `phishing` / `suspicious` / `legitimate` / `uncertain` |
+| `risk_level` | `critical` / `high` / `medium` / `low` |
+| `confidence` | 0.0 – 1.0 |
+| `recommended_action` | `block` / `quarantine` / `no_action` / etc. |
+| `evidence_summary` | Resumen en lenguaje natural |
+
+---
+
+### Tab 3 — Monitor de Email (IMAP)
+
+Conecta directamente al buzón de la cuenta de monitoreo y procesa todos los correos no leídos automáticamente. Equivalente a `run-phishing-monitor --once` desde el CLI.
+
+#### Configuración del buzón
+
+Expandir **Configuración IMAP** en el tab y completar:
+
+| Campo | Descripción |
+|---|---|
+| Host IMAP | `imap.gmail.com` para Gmail, `outlook.office365.com` para Outlook |
+| Puerto | `993` (IMAP SSL, default) |
+| Usuario | Email completo de la cuenta de monitoreo |
+| Contraseña de aplicación | Ver instrucciones abajo |
+| Buzón | `INBOX` (default) o la carpeta específica |
+| Marcar como leído | Si activado, marca los emails procesados para no repetirlos |
+
+**Generar App Password para Gmail:**
+1. Ir a [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
+2. Crear una App Password para "Mail" (requiere 2FA activo)
+3. Pegar la contraseña de 16 caracteres en el campo
+
+#### Mecanismo de reenvío
+
+El monitor está diseñado para un flujo de **reenvío como adjunto**:
+
+```
+Empleado recibe email sospechoso
+         ↓
+Reenvía el email COMO ADJUNTO (.eml) al buzón de monitoreo
+(en Outlook: Inicio → Más → Reenviar como datos adjuntos)
+(en Gmail:   Menú ⋮ → Forward as attachment)
+         ↓
+Monitor de Email detecta el email no leído
+         ↓
+Extrae el .eml adjunto (el email original sospechoso)
+         ↓
+Corre el análisis de phishing sobre el email original
+```
+
+> **Importante:** el monitor analiza el email **adjunto** (el sospechoso original), no el email del empleado que lo reenvió. Si el email sospechoso se reenvía inline en lugar de como adjunto, se analiza directamente.
+
+#### Resultados
+
+Por cada email procesado se muestra:
+- **Remitente real** del email sospechoso (no del empleado que lo reenvió)
+- **Risk Level** y **Risk Score** del análisis heurístico
+- **Reglas activadas** con detalle de evidencia
+- **Señales de URLs** (incluyendo detección de redirect wrappers y shorteners)
+- Si CAI está activo: **Veredicto multi-agente** completo con `overall_verdict`, `confidence` y `recommended_action`
+
+#### Estrategia de detección de URLs
+
+El backend detecta automáticamente URLs que ocultan su destino real:
+
+- **Redirect wrappers**: URLs donde el destino está embebido como parámetro (`?url=`, `?redirect=`, `?target=`, etc.). Cubre gateways corporativos de seguridad de email, rastreadores de marketing, y servicios de redirección genéricos.
+- **URL shorteners**: más de 35 dominios conocidos (`bit.ly`, `t.ly`, `ow.ly`, `is.gd`, `rb.gy`, etc.)
+- **Urgencia multilingüe**: términos en inglés, español y portugués
+- **Identidad sospechosa**: display names que simulan ser soporte/admin/seguridad desde dominios no corporativos
 
 ---
 

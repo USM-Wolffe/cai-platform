@@ -6,7 +6,7 @@ import hashlib
 import ipaddress
 import json
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from platform_adapters.phishing_email import (
     PHISHING_EMAIL_INPUT_SHAPE,
@@ -62,14 +62,34 @@ FREE_MAIL_DOMAINS = {
     "guerrillamail.com",
 }
 TRUSTED_DISPLAY_NAME_TERMS = (
+    # English
     "support",
     "security",
     "admin",
     "billing",
     "payroll",
     "helpdesk",
+    "it department",
+    "noreply",
+    "no-reply",
+    # Spanish
+    "soporte",
+    "seguridad",
+    "administrador",
+    "ayuda",
+    "facturación",
+    "nómina",
+    "sistemas",
+    "tecnología",
+    # Portuguese
+    "suporte",
+    "segurança",
+    "administração",
+    "faturamento",
+    "folha de pagamento",
 )
 URGENCY_TERMS = (
+    # English
     "urgent",
     "immediately",
     "action required",
@@ -84,8 +104,63 @@ URGENCY_TERMS = (
     "verify immediately",
     "confirm now",
     "click here immediately",
+    "within 24 hours",
+    "within 48 hours",
+    "account will be",
+    "will be deleted",
+    "will be suspended",
+    "will be terminated",
+    "will be deactivated",
+    "will be closed",
+    "access will be",
+    # Spanish
+    "urgente",
+    "inmediatamente",
+    "acción requerida",
+    "verifique ahora",
+    "suspendida",
+    "suspendido",
+    "aviso final",
+    "actúe ahora",
+    "cuenta suspendida",
+    "tiempo limitado",
+    "vence hoy",
+    "confirmar ahora",
+    "haga clic aquí",
+    "dentro de 24 horas",
+    "dentro de 48 horas",
+    "en las próximas",
+    "en las proximas",
+    "será eliminada",
+    "sera eliminada",
+    "será suspendida",
+    "sera suspendida",
+    "será desactivada",
+    "sera desactivada",
+    "se perderán",
+    "se perderan",
+    "cancelar ahora",
+    "reactivar ahora",
+    "reactivación",
+    "reactivacion",
+    # Portuguese
+    "urgente",
+    "imediatamente",
+    "ação necessária",
+    "acao necessaria",
+    "verifique agora",
+    "suspensa",
+    "aviso final",
+    "clique aqui",
+    "dentro de 24 horas",
+    "dentro de 48 horas",
+    "será excluída",
+    "sera excluida",
+    "será desativada",
+    "sera desativada",
 )
 THEME_PHRASES = (
+    # English
     "account verification",
     "password reset",
     "payment required",
@@ -95,8 +170,40 @@ THEME_PHRASES = (
     "crypto payment",
     "bank account",
     "confirm your identity",
+    "verify your account",
+    "reactivate your account",
+    "close your account",
+    # Spanish
+    "verificación de cuenta",
+    "verificacion de cuenta",
+    "restablecimiento de contraseña",
+    "restablecimiento de contrasena",
+    "pago requerido",
+    "actualizar su cuenta",
+    "transferencia bancaria",
+    "tarjeta de regalo",
+    "pago en criptomonedas",
+    "cuenta bancaria",
+    "confirmar su identidad",
+    "verificar su cuenta",
+    "reactivar su cuenta",
+    "cerrar su cuenta",
+    "oficina de ayuda",
+    # Portuguese
+    "verificação de conta",
+    "verificacao de conta",
+    "redefinição de senha",
+    "redefinicao de senha",
+    "pagamento necessário",
+    "pagamento necessario",
+    "transferência bancária",
+    "transferencia bancaria",
+    "confirmar identidade",
+    "verificar conta",
+    "reativar conta",
 )
 THEME_KEYWORDS = (
+    # English
     "login",
     "password",
     "verify",
@@ -111,6 +218,30 @@ THEME_KEYWORDS = (
     "crypto",
     "bitcoin",
     "credential",
+    # Spanish
+    "contraseña",
+    "contrasena",
+    "verificar",
+    "cuenta",
+    "restablecer",
+    "factura",
+    "pago",
+    "banco",
+    "transferencia",
+    "credencial",
+    "acceso",
+    # Portuguese
+    "senha",
+    "verificar",
+    "conta",
+    "redefinir",
+    "fatura",
+    "pagamento",
+    "banco",
+    "transferência",
+    "transferencia",
+    "credencial",
+    "acesso",
 )
 MIME_EXTENSION_EXPECTATIONS: dict[str, set[str]] = {
     ".pdf": {"application/pdf"},
@@ -126,7 +257,53 @@ MIME_EXTENSION_EXPECTATIONS: dict[str, set[str]] = {
     ".htm": {"text/html"},
     ".txt": {"text/plain"},
 }
-SUSPICIOUS_URL_SHORTENERS = {"bit.ly", "tinyurl.com", "t.co"}
+SUSPICIOUS_URL_SHORTENERS = {
+    "bit.ly", "bitly.com",
+    "tinyurl.com",
+    "t.co",
+    "t.ly",
+    "ow.ly",
+    "is.gd",
+    "rb.gy",
+    "cutt.ly",
+    "tiny.cc",
+    "shorturl.at",
+    "short.io",
+    "rebrand.ly",
+    "snip.ly",
+    "bl.ink",
+    "buff.ly",
+    "lnk.bio",
+    "linktr.ee",
+    "clck.ru",
+    "qr.ae",
+    "v.gd",
+    "x.co",
+    "u.to",
+    "tiny.one",
+    "shrtco.de",
+    "urlshrt.io",
+    "redir.ec",
+    "su.pr",
+    "yep.it",
+    "soo.gd",
+    "bc.vc",
+    "murl.com",
+    "chilp.it",
+    "goto.li",
+    "goo.gl",
+    "youtu.be",          # legit but often abused
+    "wp.me",
+}
+# Query parameter names commonly used by redirect/tracking services to embed the real destination.
+# Examples: SafeLinks (?url=), Google redirects (?q=), Mailchimp tracking (?u=),
+# marketing trackers (?redirect=, ?target=), corporate SSO (?return_url=), etc.
+_REDIRECT_PARAMS = frozenset({
+    "url", "u", "q", "redirect", "redirect_to", "redirect_uri",
+    "target", "to", "link", "goto", "destination", "continue",
+    "next", "return", "return_url", "returnurl", "dest", "forward",
+    "location", "src", "ref", "source", "go", "out", "exit",
+})
 # These schemes are legitimate non-web references used inside MIME emails; do not flag them.
 BENIGN_URL_SCHEMES = {"cid", "mailto", "tel", "sms", "fax", "callto"}
 SUSPICIOUS_URL_TERMS = ("login", "verify", "reset", "update", "invoice", "payment")
@@ -573,41 +750,101 @@ def _evaluate_rules(normalized_email) -> tuple[list[PhishingTriggeredRule], list
     )
 
 
+def _unwrap_redirect_url(url: str) -> str | None:
+    """Extract a destination URL embedded as a query parameter in a redirect/relay URL.
+
+    Many services (corporate email gateways, marketing trackers, security relays)
+    wrap real URLs inside a redirect URL, e.g.:
+      https://relay.example.com/track?url=https%3A%2F%2Fevil.com%2Flogin
+
+    Returns the decoded destination URL if found in a known redirect param, else None.
+    Tries URL-decoding one level since redirectors often percent-encode the destination.
+    """
+    try:
+        parsed = urlsplit(url)
+        if not parsed.query:
+            return None
+        qs = parse_qs(parsed.query, keep_blank_values=False)
+        for param, values in qs.items():
+            if param.lower() in _REDIRECT_PARAMS and values:
+                candidate = unquote(values[0])
+                # Only treat it as a redirect if the extracted value looks like a URL
+                if candidate.startswith(("http://", "https://")):
+                    return candidate
+    except Exception:
+        pass
+    return None
+
+
+def _score_single_url(url: str) -> list[str]:
+    """Return a list of suspicious reasons for a single URL (without unwrapping)."""
+    reasons: list[str] = []
+    try:
+        parsed = urlsplit(url)
+    except Exception:
+        return reasons
+    hostname = (parsed.hostname or "").lower()
+    scheme = parsed.scheme.lower()
+
+    if scheme == "data":
+        reasons.append("uses a data: URI (potential HTML/JS embedding)")
+    elif scheme != "https":
+        reasons.append("uses a non-https scheme")
+    if "%00" in url:
+        reasons.append("contains null byte (%00) in URL")
+    pct_encoded_count = url.count("%")
+    if pct_encoded_count > 4:
+        reasons.append(f"high URL-encoding ratio ({pct_encoded_count} encoded sequences)")
+    if hostname:
+        if _is_ip_literal(hostname):
+            reasons.append("uses an IP-literal host")
+        if "xn--" in hostname:
+            reasons.append("uses a punycode host")
+        if hostname in SUSPICIOUS_URL_SHORTENERS:
+            reasons.append("uses a shortener host")
+    if parsed.username is not None or "@" in parsed.netloc:
+        reasons.append("contains userinfo in the URL")
+
+    path_and_query = f"{parsed.path}?{parsed.query}".lower()
+    for term in SUSPICIOUS_URL_TERMS:
+        if term in path_and_query:
+            reasons.append(f"contains '{term}' in the path or query")
+
+    return reasons
+
+
 def _find_suspicious_urls(urls: tuple[str, ...]) -> list[SuspiciousUrlRecord]:
     suspicious_urls: list[SuspiciousUrlRecord] = []
     for url in urls:
-        reasons: list[str] = []
-        parsed = urlsplit(url)
-        hostname = (parsed.hostname or "").lower()
-        scheme = parsed.scheme.lower()
-
         # Skip legitimate MIME-internal and non-web schemes (embedded images, mailto links, etc.)
+        try:
+            scheme = urlsplit(url).scheme.lower()
+        except Exception:
+            scheme = ""
         if scheme in BENIGN_URL_SCHEMES:
             continue
 
-        if scheme == "data":
-            reasons.append("uses a data: URI (potential HTML/JS embedding)")
-        elif scheme != "https":
-            reasons.append("uses a non-https scheme")
-        if "%00" in url:
-            reasons.append("contains null byte (%00) in URL")
-        pct_encoded_count = url.count("%")
-        if pct_encoded_count > 4:
-            reasons.append(f"high URL-encoding ratio ({pct_encoded_count} encoded sequences)")
-        if hostname:
-            if _is_ip_literal(hostname):
-                reasons.append("uses an IP-literal host")
-            if "xn--" in hostname:
-                reasons.append("uses a punycode host")
-            if hostname in SUSPICIOUS_URL_SHORTENERS:
-                reasons.append("uses a shortener host")
-        if parsed.username is not None or "@" in parsed.netloc:
-            reasons.append("contains userinfo in the URL")
+        reasons: list[str] = _score_single_url(url)
 
-        path_and_query = f"{parsed.path}?{parsed.query}".lower()
-        matched_terms = [term for term in SUSPICIOUS_URL_TERMS if term in path_and_query]
-        for term in matched_terms:
-            reasons.append(f"contains '{term}' in the path or query")
+        # Redirect wrapper detection: check whether the URL is a relay that hides the real
+        # destination inside a query parameter. This covers corporate email gateways (e.g.
+        # SafeLinks), marketing trackers, URL scanners, and generic redirect services.
+        inner_url = _unwrap_redirect_url(url)
+        if inner_url is not None:
+            inner_reasons = _score_single_url(inner_url)
+            if inner_reasons:
+                # The outer relay URL wraps a suspicious destination
+                reasons.append(
+                    f"wraps a suspicious destination URL via redirect parameter: {inner_url}"
+                )
+                for r in inner_reasons:
+                    reasons.append(f"  (wrapped destination) {r}")
+            else:
+                # Flag the wrapper itself as obfuscating the real destination regardless,
+                # since hiding the final URL is a social-engineering technique.
+                reasons.append(
+                    f"uses a redirect wrapper that hides the real destination: {inner_url}"
+                )
 
         if reasons:
             suspicious_urls.append(

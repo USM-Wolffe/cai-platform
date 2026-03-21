@@ -8,7 +8,7 @@ WATCHGUARD_S3_REGION ?= us-east-2
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install-dev build up down test test-apps api-dev health demo-watchguard demo-phishing-email upload-workspace
+.PHONY: help install-dev build up down test test-apps api-dev health demo-watchguard demo-phishing-email upload-workspace install-ui install-ui-cai ui
 
 help:
 	@printf "Available targets:\n"
@@ -24,6 +24,9 @@ help:
 	@printf "  demo-watchguard  Run the baseline WatchGuard demo through the host-run orchestrator against platform-api. Requires apps/cai-orchestrator installed in the active Python env.\n"
 	@printf "  demo-phishing-email  Run the phishing email demo through the host-run orchestrator against platform-api. Requires apps/cai-orchestrator installed in the active Python env.\n"
 	@printf "  upload-workspace ZIP=<path/to/file.zip> WORKSPACE=<workspace_id>  Upload a WatchGuard workspace ZIP to S3. Example: make upload-workspace ZIP=8011029C760FA_8011029DE7578.zip WORKSPACE=8011029C760FA_8011029DE7578\n"
+	@printf "  install-ui       Install the Streamlit platform-ui app (without CAI).\n"
+	@printf "  install-ui-cai   Install the Streamlit platform-ui app with CAI agent support.\n"
+	@printf "  ui               Launch the Streamlit platform-ui at http://localhost:8501.\n"
 
 install-dev:
 	$(PYTHON) -m pip install -e packages/platform-contracts
@@ -59,6 +62,15 @@ demo-watchguard:
 
 demo-phishing-email:
 	PLATFORM_API_BASE_URL='$(PLATFORM_API_BASE_URL)' $(PYTHON) -m cai_orchestrator run-phishing-email-basic-assessment --title "Phishing email demo case" --summary "Run the phishing email basic assessment slice." --payload-file '$(DEMO_PHISHING_EMAIL_PAYLOAD)'
+
+install-ui:
+	$(PYTHON) -m pip install -e apps/platform-ui
+
+install-ui-cai:
+	$(PYTHON) -m pip install -e 'apps/platform-ui[cai]'
+
+ui:
+	$(PYTHON) -m streamlit run apps/platform-ui/src/platform_ui/app.py
 
 upload-workspace:
 	@if [ -z "$(ZIP)" ] || [ -z "$(WORKSPACE)" ]; then \
