@@ -647,17 +647,22 @@ def _render_phishing_verdict(
 
     if verdict_data:
         st.subheader("Veredicto CAI Multi-Agente")
-        cols = st.columns(3)
-        cols[0].metric("Veredicto", verdict_data.get("overall_verdict", "—"))
-        cols[1].metric("Confianza", verdict_data.get("confidence", "—"))
-        cols[2].metric("Acción recomendada", verdict_data.get("recommended_action", "—"))
-
-        evidence = verdict_data.get("evidence_summary", "")
-        if evidence:
-            st.markdown(f"**Resumen de evidencia:** {evidence}")
-
-        with st.expander("Veredicto completo (JSON)"):
-            st.json(verdict_data)
+        if verdict_data.get("overall_verdict"):
+            cols = st.columns(3)
+            cols[0].metric("Veredicto", verdict_data.get("overall_verdict", "—"))
+            cols[1].metric("Confianza", verdict_data.get("confidence", "—"))
+            cols[2].metric("Acción recomendada", verdict_data.get("recommended_action", "—"))
+            evidence = verdict_data.get("evidence_summary", "")
+            if evidence:
+                st.markdown(f"**Resumen de evidencia:** {evidence}")
+            with st.expander("Veredicto completo (JSON)"):
+                st.json(verdict_data)
+        else:
+            # Agent produced text analysis but no structured JSON verdict
+            st.info("El agente completó el análisis pero no produjo un veredicto JSON estructurado.")
+            evidence = verdict_data.get("evidence_summary", "")
+            if evidence:
+                st.markdown(evidence)
 
 
 def _eml_to_assessment_payload(raw_eml: bytes) -> dict[str, Any]:
@@ -694,8 +699,25 @@ def _eml_to_assessment_payload(raw_eml: bytes) -> dict[str, Any]:
         if isinstance(a, dict) and a.get("filename", "").strip()
     ]
 
+    # Sanitize sender.email — some From headers (e.g. automated system notifications) are
+    # malformed and contain no parseable email address (e.g. `"Display Name (via System"`
+    # without a closing angle-bracket address). Try to find an email anywhere in the sender
+    # dict values; fall back to a synthetic placeholder so the backend doesn't reject it.
+    sender = dict(v2.get("sender") or {})
+    sender_email = (sender.get("email") or "").strip()
+    if "@" not in sender_email:
+        found = None
+        for val in sender.values():
+            if isinstance(val, str):
+                m = _re.search(r"[\w.+%-]+@[\w.-]+\.[a-zA-Z]{2,}", val)
+                if m:
+                    found = m.group(0).lower()
+                    break
+        sender["email"] = found or "unknown@unknown.local"
+        sender.setdefault("domain", sender["email"].split("@")[-1])
+
     # Return full v2 payload with fallbacks applied — keeps all_headers, received_chain, etc.
-    return {**v2, "subject": subject, "text": text, "attachments": attachments}
+    return {**v2, "subject": subject, "sender": sender, "text": text, "attachments": attachments}
 
 
 # ── Tab 3: IMAP Email Monitor ────────────────────────────────────────────────
@@ -902,10 +924,11 @@ def _run_imap_monitor(
 
             if verdict_data:
                 st.markdown("---")
-                vcols = st.columns(3)
-                vcols[0].metric("Veredicto CAI", verdict_data.get("overall_verdict", "—"))
-                vcols[1].metric("Confianza", verdict_data.get("confidence", "—"))
-                vcols[2].metric("Acción", verdict_data.get("recommended_action", "—"))
+                if verdict_data.get("overall_verdict"):
+                    vcols = st.columns(3)
+                    vcols[0].metric("Veredicto CAI", verdict_data.get("overall_verdict", "—"))
+                    vcols[1].metric("Confianza", verdict_data.get("confidence", "—"))
+                    vcols[2].metric("Acción", verdict_data.get("recommended_action", "—"))
                 if verdict_data.get("evidence_summary"):
                     st.caption(verdict_data["evidence_summary"])
 
