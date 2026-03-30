@@ -87,8 +87,8 @@ _DEFAULT_CLIENT_ID = os.getenv("CLIENT_ID", "default")
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def make_client(settings: dict[str, Any]) -> PlatformApiClient:
-    return PlatformApiClient(base_url=settings["api_url"])
+def make_client(settings: dict[str, Any], timeout: float = 900.0) -> PlatformApiClient:
+    return PlatformApiClient(base_url=settings["api_url"], timeout=timeout)
 
 
 def make_boto3_s3(settings: dict[str, Any]):
@@ -104,16 +104,91 @@ def upload_zip_to_s3(
     zip_bytes: bytes,
     workspace_id: str,
     bucket: str,
+    progress_callback: Any | None = None,
 ) -> str:
-    """Upload zip bytes to S3 using the standard key convention.
+    """Upload zip bytes to S3 using multipart upload.
+
+    Splits the file into 50 MB parts so large ZIPs (1-2 GB) never load fully
+    into memory and the caller receives byte-level progress updates.
 
     Key: workspaces/{workspace_id}/input/uploads/{upload_id}/raw.zip
     Returns the s3:// URI.
+    progress_callback(bytes_uploaded: int, total_bytes: int) — called after each part.
     """
+    import io
+    import math
+
+    PART_SIZE = 50 * 1024 * 1024  # 50 MB per part
     upload_id = time.strftime("%Y%m%d_%H%M%S")
     key = f"workspaces/{workspace_id}/input/uploads/{upload_id}/raw.zip"
-    s3_client.put_object(Bucket=bucket, Key=key, Body=zip_bytes)
+    total = len(zip_bytes)
+
+    # Small files: single-part upload is simpler
+    if total <= PART_SIZE:
+        s3_client.put_object(Bucket=bucket, Key=key, Body=zip_bytes)
+        if progress_callback:
+            progress_callback(total, total)
+        return f"s3://{bucket}/{key}"
+
+    # Multipart upload
+    mpu = s3_client.create_multipart_upload(Bucket=bucket, Key=key)
+    mpu_id = mpu["UploadId"]
+    parts = []
+    stream = io.BytesIO(zip_bytes)
+    part_number = 1
+    uploaded = 0
+
+    try:
+        while True:
+            chunk = stream.read(PART_SIZE)
+            if not chunk:
+                break
+            resp = s3_client.upload_part(
+                Bucket=bucket,
+                Key=key,
+                UploadId=mpu_id,
+                PartNumber=part_number,
+                Body=chunk,
+            )
+            parts.append({"PartNumber": part_number, "ETag": resp["ETag"]})
+            uploaded += len(chunk)
+            if progress_callback:
+                progress_callback(uploaded, total)
+            part_number += 1
+
+        s3_client.complete_multipart_upload(
+            Bucket=bucket,
+            Key=key,
+            UploadId=mpu_id,
+            MultipartUpload={"Parts": parts},
+        )
+    except Exception:
+        s3_client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=mpu_id)
+        raise
+
     return f"s3://{bucket}/{key}"
+
+
+def find_latest_s3_uri_for_workspace(
+    s3_client: Any, bucket: str, workspace_id: str
+) -> str | None:
+    """Return the s3:// URI of the most recent raw.zip upload for a workspace.
+
+    Scans workspaces/{workspace_id}/input/uploads/*/raw.zip and returns the
+    latest key (upload IDs are timestamp strings, so lexicographic sort works).
+    Returns None if no uploads exist.
+    """
+    prefix = f"workspaces/{workspace_id}/input/uploads/"
+    resp = s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix)
+    keys = [
+        obj["Key"]
+        for obj in resp.get("Contents", [])
+        if obj["Key"].endswith("/raw.zip")
+    ]
+    if not keys:
+        return None
+    keys.sort()
+    return f"s3://{bucket}/{keys[-1]}"
 
 
 def run_cai_agent(agent: Any, input_: Any) -> Any:
@@ -132,15 +207,110 @@ def run_cai_agent(agent: Any, input_: Any) -> Any:
 
 def _extract_first_output_artifact_id(resp: dict[str, Any]) -> str | None:
     """Pull the first output artifact_id from an execute_* response."""
-    for artifact in resp.get("output_artifacts", []):
+    # Top-level "artifacts" list (full objects with artifact_id key)
+    for artifact in resp.get("artifacts", []) + resp.get("output_artifacts", []):
         if aid := artifact.get("artifact_id"):
             return aid
+    # observation_result.output_artifact_refs: EntityRef objects {entity_type, id}
     obs = resp.get("observation_result", {})
     refs = obs.get("output_artifact_refs", []) or obs.get("output_artifact_ids", [])
     if refs:
         item = refs[0]
-        return item.get("artifact_id") or item if isinstance(item, str) else None
+        if isinstance(item, str):
+            return item
+        return item.get("artifact_id") or item.get("id")
     return None
+
+
+# DDoS artifact subtype → wg_ddos_results key mapping
+_DDOS_SUBTYPE_MAP: dict[str, str] = {
+    "watchguard.ddos_temporal_analysis": "temporal",
+    "watchguard.ddos_top_destinations": "destinations",
+    "watchguard.ddos_top_sources": "sources",
+    "watchguard.ddos_protocol_breakdown": "protocols",
+    "watchguard.ddos_hourly_distribution": "hourly",
+    "watchguard.ddos_segment_analysis": "segment",
+    "watchguard.ddos_ip_profile": "ip_profile",
+}
+
+
+def _find_existing_staging(settings: dict[str, Any], workspace_id: str) -> dict[str, Any] | None:
+    """Return the most recent staging manifest for this workspace across all cases, or None.
+
+    Also extracts analytics content and DDoS results directly from artifact metadata,
+    so restoration requires zero additional API calls.
+    """
+    try:
+        client = make_client(settings)
+        resp = client.list_cases(client_id=settings["client_id"])
+        cases = resp.get("cases", [])
+    except Exception:
+        return None
+
+    wg_title = f"WatchGuard — {workspace_id}"
+    matching = [
+        c for c in cases
+        if c.get("case", {}).get("workflow_type") == WATCHGUARD_WORKFLOW_TYPE
+        and c.get("case", {}).get("title") == wg_title
+    ]
+    if not matching:
+        return None
+
+    matching.sort(key=lambda c: c.get("case", {}).get("created_at", ""), reverse=True)
+
+    for case_data in matching:
+        artifacts = case_data.get("artifacts", [])
+        staging_art = next(
+            (a for a in artifacts if a.get("subtype") == "watchguard.workspace_staging_manifest"),
+            None,
+        )
+        if not staging_art:
+            continue
+        run_id = (staging_art.get("produced_by_run_ref") or {}).get("id")
+        if not run_id:
+            continue
+
+        analytics_art = next(
+            (a for a in artifacts if a.get("subtype") == "watchguard.duckdb_workspace_analytics"),
+            None,
+        )
+
+        # Collect DDoS results from artifact metadata (no extra API calls needed)
+        ddos_results: dict[str, Any] = {}
+        for subtype, key in _DDOS_SUBTYPE_MAP.items():
+            art = next((a for a in artifacts if a.get("subtype") == subtype), None)
+            if art and art.get("metadata"):
+                ddos_results[key] = art["metadata"]
+
+        return {
+            "case_id": case_data.get("case", {}).get("case_id"),
+            "run_id": run_id,
+            "staging_artifact_id": staging_art.get("artifact_id"),
+            "analytics_content": analytics_art.get("metadata") if analytics_art else None,
+            "ddos_results": ddos_results or None,
+            "created_at": case_data.get("case", {}).get("created_at", ""),
+        }
+    return None
+
+
+def _restore_investigation_state(
+    settings: dict[str, Any],
+    run_id: str,
+    staging_artifact_id: str,
+    analytics_content: dict[str, Any] | None,
+    ddos_results: dict[str, Any] | None = None,
+) -> None:
+    """Restore session state from an existing run + staging artifact. Zero API calls."""
+    st.session_state["wg_run_id"] = run_id
+    st.session_state["wg_staging_artifact_id"] = staging_artifact_id
+    st.session_state.setdefault("wg_chat_history", [])
+    st.session_state.setdefault("wg_chat_raw_history", None)
+    if analytics_content:
+        st.session_state["wg_analytics_content"] = analytics_content
+    if ddos_results:
+        st.session_state["wg_ddos_results"] = ddos_results
+    else:
+        st.session_state.pop("wg_ddos_results", None)
 
 
 def _parse_cai_verdict(final_output: Any) -> dict[str, Any] | None:
@@ -246,60 +416,225 @@ def render_sidebar() -> dict[str, Any]:
 # ── Tab 1: WatchGuard S3 Investigation ───────────────────────────────────────
 
 
+def _upload_zips_to_s3(settings: dict[str, Any], uploaded_files: list[Any]) -> None:
+    """Upload one or more ZIP files to S3 with per-file progress bars.
+
+    Results are accumulated in st.session_state["wg_uploaded_workspaces"] as a
+    list of dicts: {workspace_id, s3_uri, filename, size_mb, uploaded_at}.
+    """
+    if "wg_uploaded_workspaces" not in st.session_state:
+        st.session_state["wg_uploaded_workspaces"] = []
+
+    s3 = make_boto3_s3(settings)
+
+    for f in uploaded_files:
+        workspace_id = f.name.removesuffix(".zip")
+        zip_bytes = f.read()
+        size_mb = len(zip_bytes) / (1024 * 1024)
+
+        with st.status(f"Subiendo {f.name} ({size_mb:.0f} MB)...", expanded=True) as status:
+            try:
+                pb = st.progress(0, text="Iniciando subida...")
+
+                def _cb(uploaded: int, total: int, _pb: Any = pb) -> None:
+                    pct = uploaded / total
+                    mb_done = uploaded / (1024 * 1024)
+                    mb_total = total / (1024 * 1024)
+                    _pb.progress(pct, text=f"S3 upload: {mb_done:.0f} / {mb_total:.0f} MB")
+
+                s3_uri = upload_zip_to_s3(
+                    s3, zip_bytes, workspace_id, settings["s3_bucket"],
+                    progress_callback=_cb,
+                )
+                pb.progress(1.0, text=f"Completo ({size_mb:.0f} MB)")
+                st.write(f"`{s3_uri}`")
+
+                entry = {
+                    "workspace_id": workspace_id,
+                    "s3_uri": s3_uri,
+                    "filename": f.name,
+                    "size_mb": size_mb,
+                    "uploaded_at": time.strftime("%H:%M:%S"),
+                }
+                existing = [
+                    w for w in st.session_state["wg_uploaded_workspaces"]
+                    if w["workspace_id"] == workspace_id
+                ]
+                if existing:
+                    existing[0].update(entry)
+                else:
+                    st.session_state["wg_uploaded_workspaces"].append(entry)
+
+                status.update(label=f"{f.name} subido correctamente.", state="complete")
+
+            except Exception as exc:
+                status.update(label=f"Error subiendo {f.name}: {exc}", state="error")
+                st.error(str(exc))
+
+
 def render_watchguard_tab(settings: dict[str, Any]) -> None:
     st.header("WatchGuard S3 Investigation")
     st.caption(
-        "Sube el ZIP de SharePoint, describe qué quieres investigar y el pipeline "
-        "hará el resto: sube a S3, extrae los logs, corre analytics con DuckDB y "
-        "deja el chat disponible para preguntas de seguimiento."
+        "Sube los ZIPs a S3 cuando quieras y luego inicia la investigación cuando estés listo."
     )
 
-    uploaded_file = st.file_uploader(
-        "ZIP de SharePoint", type=["zip"], key="wg_zip"
+    # ── Section 1: Upload ─────────────────────────────────────────────────────
+    st.subheader("1. Subir ZIPs a S3")
+
+    uploaded_files = st.file_uploader(
+        "ZIPs de SharePoint",
+        type=["zip"],
+        accept_multiple_files=True,
+        key="wg_zips",
     )
 
-    default_workspace = ""
-    if uploaded_file:
-        default_workspace = uploaded_file.name.removesuffix(".zip")
+    if uploaded_files:
+        pending_rows = [
+            {
+                "Archivo": f.name,
+                "Workspace ID": f.name.removesuffix(".zip"),
+                "Tamaño": f"{f.size / (1024 * 1024):.1f} MB",
+            }
+            for f in uploaded_files
+        ]
+        st.dataframe(pd.DataFrame(pending_rows), use_container_width=True, hide_index=True)
 
-    workspace_id = st.text_input(
-        "Workspace ID",
-        value=default_workspace,
-        help="Auto-detectado del nombre del archivo. Edítalo si es necesario.",
-        key="wg_workspace",
-    )
+    if st.button("Subir a S3", key="wg_upload", disabled=not uploaded_files):
+        _upload_zips_to_s3(settings, uploaded_files)
+
+    uploaded_workspaces: list[dict] = st.session_state.get("wg_uploaded_workspaces", [])
+    if uploaded_workspaces:
+        st.success(f"{len(uploaded_workspaces)} workspace(s) disponibles en S3 (esta sesión)")
+        ws_rows = [
+            {
+                "Workspace ID": w["workspace_id"],
+                "Archivo": w["filename"],
+                "Tamaño": f"{w['size_mb']:.1f} MB",
+                "Subido": w["uploaded_at"],
+                "S3 URI": w["s3_uri"],
+            }
+            for w in uploaded_workspaces
+        ]
+        st.dataframe(pd.DataFrame(ws_rows), use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # ── Section 2: Investigate ────────────────────────────────────────────────
+    st.subheader("2. Iniciar investigación")
+
+    workspace_options = [w["workspace_id"] for w in uploaded_workspaces]
+    s3_uri_ready: str | None = None
+
+    if workspace_options:
+        ws_source = st.radio(
+            "Workspace a investigar",
+            ["Seleccionar de subidos en esta sesión", "Ingresar manualmente"],
+            horizontal=True,
+            key="wg_ws_source",
+        )
+        if ws_source == "Seleccionar de subidos en esta sesión":
+            selected_ws = st.selectbox("Workspace", workspace_options, key="wg_ws_select")
+            workspace_id = selected_ws or ""
+            s3_uri_ready = next(
+                (w["s3_uri"] for w in uploaded_workspaces if w["workspace_id"] == selected_ws),
+                None,
+            )
+        else:
+            workspace_id = st.text_input(
+                "Workspace ID",
+                help="ID de un workspace previamente subido a S3.",
+                key="wg_workspace_manual",
+            )
+    else:
+        workspace_id = st.text_input(
+            "Workspace ID",
+            help="Sube un ZIP primero, o ingresa el ID de un workspace ya existente en S3.",
+            key="wg_workspace_manual",
+        )
+
     question = st.text_area(
         "¿Qué quieres investigar?",
         value="Top IPs con más denials, tipos de alarmas y rango de fechas del dataset.",
         key="wg_question",
     )
 
-    if st.button("Investigar", key="wg_run", disabled=not (uploaded_file and workspace_id)):
-        _run_watchguard_investigation(settings, uploaded_file, workspace_id, question)
+    # ── Prior investigation check ─────────────────────────────────────────────
+    if workspace_id:
+        # Auto-check once per workspace change; cache result in session_state
+        if st.session_state.get("_wg_prior_checked_for") != workspace_id:
+            with st.spinner("Verificando investigaciones previas..."):
+                st.session_state["_wg_prior"] = _find_existing_staging(settings, workspace_id)
+                st.session_state["_wg_prior_checked_for"] = workspace_id
+
+        prior = st.session_state.get("_wg_prior")
+        if prior:
+            created_short = prior["created_at"][:10] if prior.get("created_at") else "—"
+            st.info(
+                f"Investigación previa encontrada — **{created_short}** | "
+                f"Run: `{prior['run_id'][:20]}...`"
+            )
+            col_ret, col_new, _ = st.columns([1, 1, 2])
+            if col_ret.button("↩ Retomar investigación", key="wg_retomar"):
+                with st.spinner("Restaurando estado..."):
+                    _restore_investigation_state(
+                        settings,
+                        prior["run_id"],
+                        prior["staging_artifact_id"],
+                        prior.get("analytics_content"),
+                        prior.get("ddos_results"),
+                    )
+                st.rerun()
+            nueva_label = "⊕ Nueva investigación"
+        else:
+            nueva_label = "Investigar"
+    else:
+        nueva_label = "Investigar"
+
+    if st.button(nueva_label, key="wg_run", disabled=not workspace_id):
+        resolved_uri = s3_uri_ready
+        if not resolved_uri:
+            # Try to find the latest upload for this workspace in S3
+            with st.spinner(f"Buscando último upload de '{workspace_id}' en S3..."):
+                try:
+                    s3 = make_boto3_s3(settings)
+                    resolved_uri = find_latest_s3_uri_for_workspace(
+                        s3, settings["s3_bucket"], workspace_id
+                    )
+                except Exception as exc:
+                    st.error(f"Error consultando S3: {exc}")
+                    resolved_uri = None
+            if not resolved_uri:
+                st.error(
+                    f"No se encontró ningún upload para el workspace '{workspace_id}' en S3. "
+                    "Sube el ZIP primero."
+                )
+        if resolved_uri:
+            # Clear prior cache so after this run the new investigation is found
+            st.session_state.pop("_wg_prior_checked_for", None)
+            _run_watchguard_investigation(settings, resolved_uri, workspace_id, question)
 
     if st.session_state.get("wg_run_id"):
         _render_analytics_cached(settings)
+        st.divider()
+        _render_ddos_suite(settings)
+        st.divider()
+        _render_query_builder(settings)
         st.divider()
         _render_watchguard_chat(settings)
 
 
 def _run_watchguard_investigation(
     settings: dict[str, Any],
-    uploaded_file: Any,
+    s3_uri: str,
     workspace_id: str,
     question: str,
 ) -> None:
-    zip_bytes = uploaded_file.read()
-
     with st.status("Ejecutando pipeline WatchGuard S3...", expanded=True) as status:
         try:
-            # Step 1 — Upload ZIP to S3
-            status.update(label="Subiendo ZIP a S3...")
-            s3 = make_boto3_s3(settings)
-            s3_uri = upload_zip_to_s3(s3, zip_bytes, workspace_id, settings["s3_bucket"])
-            st.write(f"Subido: `{s3_uri}`")
+            st.write(f"Workspace: `{workspace_id}`")
+            st.write(f"S3 URI: `{s3_uri}`")
 
-            # Step 2 — Create case
+            # Step 1 — Create case
             status.update(label="Creando caso de investigación...")
             client = make_client(settings)
             case_resp = client.create_case(
@@ -311,7 +646,7 @@ def _run_watchguard_investigation(
             case_id = case_resp["case"]["case_id"]
             st.write(f"Caso: `{case_id}`")
 
-            # Step 3 — Attach S3 ZIP artifact reference
+            # Step 2 — Attach S3 ZIP artifact reference
             status.update(label="Adjuntando referencia S3...")
             art_resp = client.attach_input_artifact(
                 case_id=case_id,
@@ -325,7 +660,7 @@ def _run_watchguard_investigation(
             )
             artifact_id = art_resp["artifact"]["artifact_id"]
 
-            # Step 4 — Create run
+            # Step 3 — Create run
             status.update(label="Creando run...")
             run_resp = client.create_run(
                 case_id=case_id,
@@ -335,7 +670,7 @@ def _run_watchguard_investigation(
             run_id = run_resp["run"]["run_id"]
             st.write(f"Run: `{run_id}`")
 
-            # Step 5 — Stage workspace ZIP (extract TARs → individual CSVs → S3)
+            # Step 4 — Stage workspace ZIP (extract TARs → individual CSVs → S3)
             status.update(label="Staging: extrayendo TARs y subiendo CSVs a S3...")
             staging_resp = client.execute_watchguard_stage_workspace_zip(
                 run_id=run_id,
@@ -347,7 +682,7 @@ def _run_watchguard_investigation(
                 raise ValueError(f"No se encontró staging artifact en: {staging_resp}")
             st.write(f"Staging manifest: `{staging_artifact_id}`")
 
-            # Step 6 — DuckDB workspace analytics
+            # Step 5 — DuckDB workspace analytics
             status.update(label="Corriendo analytics con DuckDB...")
             analytics_resp = client.execute_watchguard_duckdb_workspace_analytics(
                 run_id=run_id,
@@ -358,7 +693,7 @@ def _run_watchguard_investigation(
             if not analytics_artifact_id:
                 raise ValueError(f"No se encontró analytics artifact en: {analytics_resp}")
 
-            # Step 7 — Read analytics artifact content
+            # Step 6 — Read analytics artifact content
             status.update(label="Leyendo resultados...")
             content_resp = client.read_artifact_content(artifact_id=analytics_artifact_id)
             content = content_resp.get("content", content_resp)
@@ -391,29 +726,32 @@ def _render_analytics_cached(settings: dict[str, Any]) -> None:
 def _render_analytics_results(content: dict[str, Any]) -> None:
     st.subheader("Resultados de Analytics")
 
-    # Top-level scalar metrics
-    deny_count = content.get("deny_count", 0)
-    time_range = content.get("time_range") or {}
+    # Analytics payload nests data under family keys: traffic / alarm / event
+    traffic = content.get("traffic") or content  # fallback for legacy flat format
+    alarm = content.get("alarm") or {}
+
+    deny_count = traffic.get("deny_count", 0)
+    time_range = traffic.get("time_range") or {}
     t_min = time_range.get("min", "—")
     t_max = time_range.get("max", "—")
+    total_rows = traffic.get("total_rows", 0)
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Deny Count", deny_count)
-    col2.metric("Fecha inicio", t_min)
-    col3.metric("Fecha fin", t_max)
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total eventos", f"{total_rows:,}" if total_rows else "—")
+    col2.metric("Deny Count", deny_count)
+    col3.metric("Fecha inicio", str(t_min)[:10] if t_min and t_min != "—" else "—")
+    col4.metric("Fecha fin", str(t_max)[:10] if t_max and t_max != "—" else "—")
 
-    # Table helpers
-    def _show_table(key: str, label: str) -> None:
-        rows = content.get(key)
+    def _show_table(src: dict[str, Any], key: str, label: str) -> None:
+        rows = src.get(key)
         if rows:
             with st.expander(label, expanded=True):
-                st.dataframe(pd.DataFrame(rows), use_container_width=True)
+                st.dataframe(pd.DataFrame(rows) if isinstance(rows, list) else pd.DataFrame([rows]), use_container_width=True)
 
-    _show_table("top_src_ips", "Top Source IPs")
-    _show_table("top_dst_ips", "Top Destination IPs")
-    _show_table("action_counts", "Distribución de Acciones")
-    _show_table("protocol_breakdown", "Protocolos")
-    _show_table("alarm_type_counts", "Tipos de Alarma")
+    _show_table(traffic, "top_src_ips", "Top Source IPs")
+    _show_table(traffic, "top_dst_ips", "Top Destination IPs")
+    _show_table(traffic, "protocol_breakdown", "Protocolos")
+    _show_table(alarm, "alarm_type_counts", "Tipos de Alarma")
 
 
 def _render_watchguard_chat(settings: dict[str, Any]) -> None:
@@ -468,6 +806,617 @@ def _handle_watchguard_chat_turn(settings: dict[str, Any], user_input: str) -> N
         {"role": "assistant", "content": response_text}
     )
     st.session_state["wg_chat_raw_history"] = result.to_input_list()
+
+
+# ── DDoS Suite ───────────────────────────────────────────────────────────────
+
+
+def _run_ddos_observations(
+    settings: dict[str, Any], run_id: str, staging_artifact_id: str
+) -> None:
+    """Run all 7 DDoS observations sequentially and store results in session state."""
+    client = make_client(settings)
+    results: dict[str, Any] = {}
+
+    def _obs_content(resp: dict[str, Any]) -> dict[str, Any]:
+        art_id = _extract_first_output_artifact_id(resp)
+        if not art_id:
+            return {}
+        raw = client.read_artifact_content(artifact_id=art_id)
+        return raw.get("content", raw)
+
+    with st.status("Ejecutando análisis DDoS...", expanded=True) as status:
+        try:
+            status.update(label="Análisis temporal (eventos por día)...")
+            resp = client.execute_watchguard_ddos_temporal_analysis(
+                run_id=run_id, requested_by="platform_ui", input_artifact_id=staging_artifact_id
+            )
+            results["temporal"] = _obs_content(resp)
+            st.write(f"Temporal: {results['temporal'].get('total_events', 0)} eventos totales")
+
+            status.update(label="Top destinos (IPs más atacadas)...")
+            resp = client.execute_watchguard_ddos_top_destinations(
+                run_id=run_id, requested_by="platform_ui", input_artifact_id=staging_artifact_id
+            )
+            results["destinations"] = _obs_content(resp)
+
+            status.update(label="Top fuentes (IPs atacantes)...")
+            resp = client.execute_watchguard_ddos_top_sources(
+                run_id=run_id, requested_by="platform_ui", input_artifact_id=staging_artifact_id
+            )
+            results["sources"] = _obs_content(resp)
+
+            status.update(label="Distribución de protocolos...")
+            resp = client.execute_watchguard_ddos_protocol_breakdown(
+                run_id=run_id, requested_by="platform_ui", input_artifact_id=staging_artifact_id
+            )
+            results["protocols"] = _obs_content(resp)
+
+            peak_day = results["temporal"].get("peak_day")
+            if peak_day:
+                status.update(label=f"Distribución horaria del día pico ({peak_day})...")
+                resp = client.execute_watchguard_ddos_hourly_distribution(
+                    run_id=run_id, requested_by="platform_ui",
+                    input_artifact_id=staging_artifact_id, date=peak_day,
+                )
+                results["hourly"] = _obs_content(resp)
+
+            top_segment = None
+            segments = results["sources"].get("segments", [])
+            if segments:
+                top_segment = segments[0].get("segment")
+            if top_segment:
+                status.update(label=f"Análisis de segmento dominante ({top_segment})...")
+                resp = client.execute_watchguard_ddos_segment_analysis(
+                    run_id=run_id, requested_by="platform_ui",
+                    input_artifact_id=staging_artifact_id, segment=top_segment,
+                )
+                results["segment"] = _obs_content(resp)
+
+            top_src_ip = None
+            sources = results["sources"].get("sources", [])
+            if sources:
+                top_src_ip = sources[0].get("src_ip")
+            if top_src_ip:
+                status.update(label=f"Perfil del atacante principal ({top_src_ip})...")
+                resp = client.execute_watchguard_ddos_ip_profile(
+                    run_id=run_id, requested_by="platform_ui",
+                    input_artifact_id=staging_artifact_id, ip=top_src_ip,
+                )
+                results["ip_profile"] = _obs_content(resp)
+
+            st.session_state["wg_ddos_results"] = results
+            status.update(label="Análisis DDoS completado.", state="complete")
+
+        except Exception as exc:
+            status.update(label=f"Error en análisis DDoS: {exc}", state="error")
+            st.error(str(exc))
+
+
+def _render_ddos_suite(settings: dict[str, Any]) -> None:
+    st.subheader("Análisis DDoS")
+    run_id = st.session_state.get("wg_run_id")
+    staging_artifact_id = st.session_state.get("wg_staging_artifact_id")
+    if not (run_id and staging_artifact_id):
+        return
+
+    ddos = st.session_state.get("wg_ddos_results")
+
+    if not ddos:
+        st.caption("Corre el análisis DDoS especializado sobre los logs del workspace.")
+        if st.button("Iniciar Análisis DDoS", key="wg_ddos_run"):
+            _run_ddos_observations(settings, run_id, staging_artifact_id)
+            st.rerun()
+        return
+
+    # ── Temporal ──────────────────────────────────────────────────────────────
+    temporal = ddos.get("temporal", {})
+    by_day = temporal.get("by_day", [])
+    if by_day:
+        with st.expander("Eventos por día", expanded=True):
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total eventos", temporal.get("total_events", 0))
+            col2.metric("Día pico", temporal.get("peak_day", "—"))
+            col3.metric("Eventos en pico", temporal.get("peak_events", 0))
+            df_temporal = pd.DataFrame(by_day).rename(columns={"date": "Fecha", "events": "Eventos"})
+            if "Fecha" in df_temporal.columns:
+                df_temporal = df_temporal.set_index("Fecha")
+            st.line_chart(df_temporal[["Eventos"]])
+
+    # ── Top Destinations ──────────────────────────────────────────────────────
+    destinations = ddos.get("destinations", {}).get("destinations", [])
+    if destinations:
+        with st.expander("IPs más atacadas (destinos)", expanded=True):
+            df_dst = pd.DataFrame(destinations).rename(
+                columns={"dst_ip": "IP Destino", "count": "Eventos", "pct": "% del total", "rank": "Rank"}
+            )
+            st.dataframe(df_dst, use_container_width=True, hide_index=True)
+            if "Eventos" in df_dst.columns and "IP Destino" in df_dst.columns:
+                st.bar_chart(df_dst.set_index("IP Destino")[["Eventos"]].head(10))
+
+    # ── Top Sources ───────────────────────────────────────────────────────────
+    sources_data = ddos.get("sources", {})
+    sources = sources_data.get("sources", [])
+    segments = sources_data.get("segments", [])
+    if sources:
+        with st.expander("IPs atacantes (fuentes)", expanded=True):
+            col_s, col_seg = st.columns(2)
+            with col_s:
+                st.caption("Top IPs fuente")
+                df_src = pd.DataFrame(sources).rename(
+                    columns={"src_ip": "IP Fuente", "count": "Eventos", "pct": "%", "rank": "Rank"}
+                )
+                st.dataframe(df_src, use_container_width=True, hide_index=True)
+            with col_seg:
+                if segments:
+                    st.caption("Segmentos /16 dominantes")
+                    df_seg = pd.DataFrame(segments).rename(
+                        columns={"segment": "Segmento", "count": "Eventos", "pct": "%", "rank": "Rank"}
+                    )
+                    st.dataframe(df_seg, use_container_width=True, hide_index=True)
+
+    # ── Protocol Breakdown ────────────────────────────────────────────────────
+    protocols = ddos.get("protocols", {}).get("protocols", [])
+    if protocols:
+        with st.expander("Distribución de protocolos"):
+            df_proto = pd.DataFrame(protocols).rename(
+                columns={"protocol": "Protocolo", "count": "Eventos", "pct": "%", "rank": "Rank"}
+            )
+            st.dataframe(df_proto, use_container_width=True, hide_index=True)
+            if "Eventos" in df_proto.columns and "Protocolo" in df_proto.columns:
+                st.bar_chart(df_proto.set_index("Protocolo")[["Eventos"]])
+
+    # ── Hourly Distribution ───────────────────────────────────────────────────
+    hourly = ddos.get("hourly", {})
+    by_hour = hourly.get("by_hour", [])
+    if by_hour:
+        with st.expander(f"Distribución horaria — {hourly.get('date', '')}"):
+            col1, col2 = st.columns(2)
+            col1.metric("Hora pico", hourly.get("peak_hour", "—"))
+            col2.metric("Eventos en hora pico", hourly.get("peak_events", 0))
+            df_hour = pd.DataFrame(by_hour).rename(columns={"hour": "Hora", "events": "Eventos"})
+            if "Hora" in df_hour.columns:
+                df_hour = df_hour.set_index("Hora")
+            st.bar_chart(df_hour[["Eventos"]])
+
+    # ── Segment Analysis ──────────────────────────────────────────────────────
+    segment = ddos.get("segment", {})
+    if segment:
+        with st.expander(f"Análisis de segmento — {segment.get('segment', '')}"):
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Total eventos", segment.get("total_events", 0))
+            c2.metric("Allow", segment.get("allow_events", 0))
+            c3.metric("Deny", segment.get("deny_events", 0))
+            if segment.get("top_dst_ips"):
+                st.caption("IPs destino más afectadas en el segmento")
+                st.dataframe(pd.DataFrame(segment["top_dst_ips"]), use_container_width=True, hide_index=True)
+            if segment.get("top_dst_ports"):
+                st.caption("Puertos destino")
+                st.dataframe(pd.DataFrame(segment["top_dst_ports"]), use_container_width=True, hide_index=True)
+
+    # ── IP Profile ────────────────────────────────────────────────────────────
+    ip_profile = ddos.get("ip_profile", {})
+    if ip_profile:
+        with st.expander(f"Perfil IP atacante — {ip_profile.get('ip', '')}"):
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Total eventos", ip_profile.get("total_events", 0))
+            c2.metric("Allow", ip_profile.get("allow_events", 0))
+            c3.metric("Deny", ip_profile.get("deny_events", 0))
+            c4.metric("Activo desde", ip_profile.get("first_seen", "—"))
+            if ip_profile.get("top_dst_ips"):
+                st.caption("IPs destino más atacadas por este IP")
+                st.dataframe(pd.DataFrame(ip_profile["top_dst_ips"]), use_container_width=True, hide_index=True)
+
+    if st.button("Re-ejecutar análisis DDoS", key="wg_ddos_rerun"):
+        del st.session_state["wg_ddos_results"]
+        st.rerun()
+
+
+# ── Query Builder ─────────────────────────────────────────────────────────────
+
+
+def _render_query_builder(settings: dict[str, Any]) -> None:
+    st.subheader("Consultas personalizadas")
+    run_id = st.session_state.get("wg_run_id")
+    staging_artifact_id = st.session_state.get("wg_staging_artifact_id")
+    if not (run_id and staging_artifact_id):
+        return
+
+    mode = st.radio(
+        "Tipo de consulta",
+        ["Filtro simple", "SQL avanzado (DuckDB)"],
+        horizontal=True,
+        key="qb_mode",
+    )
+
+    if mode == "Filtro simple":
+        _render_simple_filter(settings, run_id, staging_artifact_id)
+    else:
+        _render_duckdb_query(settings, run_id, staging_artifact_id)
+
+    query_result = st.session_state.get("wg_query_result")
+    if query_result:
+        st.caption(f"Resultados de la consulta ({query_result.get('row_count', 0)} filas)")
+        rows = query_result.get("rows", [])
+        if rows:
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("La consulta no devolvió resultados.")
+
+
+def _render_simple_filter(
+    settings: dict[str, Any], run_id: str, staging_artifact_id: str
+) -> None:
+    FIELDS = ["src_ip", "dst_ip", "action", "protocol", "policy"]
+    OPS = ["eq", "in"]
+    ACTION_VALS = ["allow", "deny", "drop", "reject"]
+
+    col1, col2, col3 = st.columns([2, 1, 3])
+    with col1:
+        field = st.selectbox("Campo", FIELDS, key="qb_field")
+    with col2:
+        op = st.selectbox("Operador", OPS, key="qb_op")
+    with col3:
+        if field == "action":
+            if op == "in":
+                value_raw = st.multiselect("Valores", ACTION_VALS, default=["deny"], key="qb_value_multi")
+                value = value_raw
+            else:
+                value = st.selectbox("Valor", ACTION_VALS, key="qb_value_action")
+        else:
+            raw = st.text_input(
+                "Valor (para 'in', separa con comas)" if op == "in" else "Valor",
+                key="qb_value_text",
+            )
+            value = [v.strip() for v in raw.split(",")] if op == "in" and raw else raw
+
+    limit = st.slider("Límite de resultados", min_value=1, max_value=50, value=20, key="qb_limit")
+    reason = st.text_input("Razón de la consulta", value="Investigación vía platform-ui", key="qb_reason")
+
+    if st.button("Ejecutar filtro", key="qb_run_filter"):
+        if not value:
+            st.warning("Ingresa un valor para el filtro.")
+            return
+        client = make_client(settings)
+        query = {"filters": [{"field": field, "op": op, "value": value}], "limit": limit}
+        try:
+            with st.spinner("Ejecutando consulta..."):
+                resp = client.execute_watchguard_guarded_custom_query(
+                    run_id=run_id,
+                    input_artifact_id=staging_artifact_id,
+                    query=query,
+                    reason=reason,
+                    approval={
+                        "status": "approved",
+                        "reason": "Aprobado por el analista vía platform-ui",
+                        "approver_kind": "platform_ui_analyst",
+                        "approver_ref": None,
+                    },
+                    requested_by="platform_ui",
+                )
+            summary = resp.get("query_summary", {})
+            rows = summary.get("rows", []) or []
+            st.session_state["wg_query_result"] = {
+                "rows": rows,
+                "row_count": summary.get("row_count", len(rows)),
+            }
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Error en la consulta: {exc}")
+
+
+def _render_duckdb_query(
+    settings: dict[str, Any], run_id: str, staging_artifact_id: str
+) -> None:
+    FAMILIES = ["traffic", "alarm", "event"]
+    family = st.selectbox("Familia de logs", FAMILIES, key="qb_family")
+
+    st.caption(
+        "Filtros opcionales — campo + operador + valor. "
+        "Campos disponibles en **traffic**: src_ip, dst_ip, action, protocol, policy, src_port, dst_port. "
+        "En **alarm**: alarm_type, src_ip. En **event**: type."
+    )
+
+    n_filters = st.number_input("Número de filtros", min_value=0, max_value=5, value=0, step=1, key="qb_n_filters")
+    filters: list[dict[str, Any]] = []
+    for i in range(int(n_filters)):
+        c1, c2, c3 = st.columns([2, 1, 3])
+        f_field = c1.text_input("Campo", key=f"qb_df_field_{i}")
+        f_op = c2.selectbox("Op", ["eq", "in", "gt", "lt", "gte", "lte"], key=f"qb_df_op_{i}")
+        f_val_raw = c3.text_input("Valor (comas para 'in')", key=f"qb_df_val_{i}")
+        if f_field and f_val_raw:
+            f_val = [v.strip() for v in f_val_raw.split(",")] if f_op == "in" else f_val_raw
+            filters.append({"field": f_field, "op": f_op, "value": f_val})
+
+    limit = st.slider("Límite de resultados", min_value=1, max_value=500, value=50, key="qb_sql_limit")
+    reason = st.text_input("Razón", value="Consulta DuckDB vía platform-ui", key="qb_sql_reason")
+
+    if st.button("Ejecutar consulta DuckDB", key="qb_run_sql"):
+        client = make_client(settings)
+        try:
+            with st.spinner("Ejecutando consulta DuckDB en S3..."):
+                resp = client.execute_watchguard_duckdb_workspace_query(
+                    run_id=run_id,
+                    input_artifact_id=staging_artifact_id,
+                    family=family,
+                    filters=filters,
+                    limit=limit,
+                    reason=reason,
+                    requested_by="platform_ui",
+                )
+            summary = resp.get("query_summary", {})
+            rows = summary.get("rows", []) or []
+            st.session_state["wg_query_result"] = {
+                "rows": rows,
+                "row_count": summary.get("row_count", len(rows)),
+            }
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Error en la consulta DuckDB: {exc}")
+
+
+# ── Tab: Workspace Browser ────────────────────────────────────────────────────
+
+
+def _list_s3_workspaces(s3_client: Any, bucket: str) -> list[dict[str, Any]]:
+    """List all workspaces in S3 with upload and staging status."""
+    resp = s3_client.list_objects_v2(Bucket=bucket, Prefix="workspaces/", Delimiter="/")
+    workspaces = []
+    for prefix_entry in resp.get("CommonPrefixes", []):
+        ws_prefix = prefix_entry["Prefix"]  # e.g. "workspaces/logs-ejemplo-ddos/"
+        ws_id = ws_prefix.rstrip("/").split("/")[-1]
+
+        # Find latest upload
+        uploads_resp = s3_client.list_objects_v2(
+            Bucket=bucket, Prefix=f"{ws_prefix}input/uploads/", Delimiter="/"
+        )
+        upload_ids = [
+            p["Prefix"].rstrip("/").split("/")[-1]
+            for p in uploads_resp.get("CommonPrefixes", [])
+        ]
+        upload_ids.sort()
+        last_upload_id = upload_ids[-1] if upload_ids else None
+        last_upload_s3_uri = (
+            f"s3://{bucket}/{ws_prefix}input/uploads/{last_upload_id}/raw.zip"
+            if last_upload_id
+            else None
+        )
+
+        # Check staging
+        staging_resp = s3_client.list_objects_v2(
+            Bucket=bucket, Prefix=f"{ws_prefix}staging/", Delimiter="/"
+        )
+        has_staging = len(staging_resp.get("CommonPrefixes", [])) > 0
+
+        workspaces.append({
+            "workspace_id": ws_id,
+            "upload_count": len(upload_ids),
+            "last_upload_id": last_upload_id,
+            "last_upload_s3_uri": last_upload_s3_uri,
+            "has_staging": has_staging,
+        })
+    return workspaces
+
+
+def render_workspace_browser_tab(settings: dict[str, Any]) -> None:
+    st.header("Workspace Browser")
+    st.caption(
+        f"Workspaces disponibles en S3 — bucket: `{settings['s3_bucket']}`"
+    )
+
+    col_btn, col_info = st.columns([1, 4])
+    if col_btn.button("Actualizar lista", key="wb_refresh"):
+        st.session_state.pop("wb_workspaces", None)
+
+    if "wb_workspaces" not in st.session_state:
+        with st.spinner("Consultando S3..."):
+            try:
+                s3 = make_boto3_s3(settings)
+                st.session_state["wb_workspaces"] = _list_s3_workspaces(s3, settings["s3_bucket"])
+            except Exception as exc:
+                st.error(f"Error consultando S3: {exc}")
+                return
+
+    workspaces: list[dict] = st.session_state.get("wb_workspaces", [])
+    if not workspaces:
+        st.info("No se encontraron workspaces en S3.")
+        return
+
+    table_rows = [
+        {
+            "Workspace ID": w["workspace_id"],
+            "Uploads": w["upload_count"],
+            "Último upload": w["last_upload_id"] or "—",
+            "Staging": "✓" if w["has_staging"] else "—",
+            "S3 URI (último)": w["last_upload_s3_uri"] or "—",
+        }
+        for w in workspaces
+    ]
+    st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.subheader("Seleccionar workspace para investigar")
+
+    ws_options = [w["workspace_id"] for w in workspaces if w["last_upload_s3_uri"]]
+    if not ws_options:
+        st.warning("Ningún workspace tiene uploads disponibles.")
+        return
+
+    selected = st.selectbox("Workspace", ws_options, key="wb_selected")
+    selected_ws = next((w for w in workspaces if w["workspace_id"] == selected), None)
+
+    if selected_ws:
+        st.write(f"Último upload: `{selected_ws['last_upload_s3_uri']}`")
+        st.write(f"Staging completado: {'Sí' if selected_ws['has_staging'] else 'No'}")
+
+    if st.button("Agregar a sesión e investigar", key="wb_investigate", disabled=not selected_ws):
+        ws = selected_ws
+        if "wg_uploaded_workspaces" not in st.session_state:
+            st.session_state["wg_uploaded_workspaces"] = []
+
+        entry = {
+            "workspace_id": ws["workspace_id"],
+            "s3_uri": ws["last_upload_s3_uri"],
+            "filename": f"{ws['workspace_id']}.zip",
+            "size_mb": 0.0,
+            "uploaded_at": ws["last_upload_id"] or "—",
+        }
+        existing = [
+            w for w in st.session_state["wg_uploaded_workspaces"]
+            if w["workspace_id"] == ws["workspace_id"]
+        ]
+        if existing:
+            existing[0].update(entry)
+        else:
+            st.session_state["wg_uploaded_workspaces"].append(entry)
+        # Store message and rerun so WatchGuard tab (rendered before this tab)
+        # picks up the updated wg_uploaded_workspaces on the next pass.
+        st.session_state["wb_pending_success"] = (
+            f"Workspace `{ws['workspace_id']}` agregado. "
+            "Ve al tab **WatchGuard S3 Investigation** → Sección 2 para iniciar la investigación."
+        )
+        st.rerun()
+
+    if msg := st.session_state.pop("wb_pending_success", None):
+        st.success(msg)
+
+
+# ── Tab: Case History ─────────────────────────────────────────────────────────
+
+
+def render_case_history_tab(settings: dict[str, Any]) -> None:
+    st.header("Historial de Casos")
+    st.caption(f"Casos del cliente `{settings['client_id']}`")
+
+    col_btn, _ = st.columns([1, 4])
+    if col_btn.button("Actualizar", key="ch_refresh"):
+        st.session_state.pop("ch_cases", None)
+
+    if "ch_cases" not in st.session_state:
+        with st.spinner("Cargando casos..."):
+            try:
+                client = make_client(settings)
+                resp = client.list_cases(client_id=settings["client_id"])
+                st.session_state["ch_cases"] = resp.get("cases", [])
+            except Exception as exc:
+                st.error(f"Error cargando historial: {exc}")
+                return
+
+    cases: list[dict] = st.session_state.get("ch_cases", [])
+    if not cases:
+        st.info("No hay casos para este cliente.")
+        return
+
+    # Sort: newest first (case_id is a UUID, use created_at if available)
+    cases_sorted = sorted(
+        cases,
+        key=lambda c: c.get("case", {}).get("created_at", ""),
+        reverse=True,
+    )
+
+    table_rows = []
+    for c in cases_sorted:
+        case = c.get("case", {})
+        artifacts = c.get("artifacts", [])
+        table_rows.append({
+            "Case ID": case.get("case_id", "")[:8] + "...",
+            "Título": case.get("title", "—"),
+            "Workflow": case.get("workflow_type", "—"),
+            "Estado": case.get("status", "—"),
+            "Artefactos": len(artifacts),
+            "Creado": case.get("created_at", "—"),
+            "_case_id": case.get("case_id", ""),
+        })
+
+    df = pd.DataFrame(table_rows)
+    st.dataframe(
+        df.drop(columns=["_case_id"]),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.divider()
+    st.subheader("Detalle del caso")
+
+    case_ids = [row["_case_id"] for row in table_rows]
+    case_labels = [f"{row['Título']} [{row['_case_id'][:8]}]" for row in table_rows]
+    selected_label = st.selectbox("Seleccionar caso", case_labels, key="ch_selected_case")
+
+    if selected_label:
+        idx = case_labels.index(selected_label)
+        selected_case_id = case_ids[idx]
+        selected = next(
+            (c for c in cases_sorted if c.get("case", {}).get("case_id") == selected_case_id),
+            None,
+        )
+
+        if selected:
+            case = selected.get("case", {})
+            artifacts = selected.get("artifacts", [])
+
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Workflow", case.get("workflow_type", "—"))
+            col2.metric("Estado", case.get("status", "—"))
+            col3.metric("Artefactos", len(artifacts))
+
+            st.markdown(f"**Resumen:** {case.get('summary', '—')}")
+            st.caption(f"Case ID: `{case.get('case_id')}`  |  Creado: {case.get('created_at', '—')}")
+
+            # ── Continuar investigación ───────────────────────────────────────
+            if case.get("workflow_type") == WATCHGUARD_WORKFLOW_TYPE:
+                staging_art = next(
+                    (a for a in artifacts if a.get("subtype") == "watchguard.workspace_staging_manifest"),
+                    None,
+                )
+                if staging_art:
+                    run_id = (staging_art.get("produced_by_run_ref") or {}).get("id")
+                    staging_artifact_id = staging_art.get("artifact_id")
+                    analytics_art = next(
+                        (a for a in artifacts if a.get("subtype") == "watchguard.duckdb_workspace_analytics"),
+                        None,
+                    )
+                    analytics_content = analytics_art.get("metadata") if analytics_art else None
+                    ddos_results: dict[str, Any] = {}
+                    for subtype, key in _DDOS_SUBTYPE_MAP.items():
+                        art = next((a for a in artifacts if a.get("subtype") == subtype), None)
+                        if art and art.get("metadata"):
+                            ddos_results[key] = art["metadata"]
+                    if run_id and staging_artifact_id:
+                        if st.button(
+                            "↩ Continuar investigación en WatchGuard",
+                            key=f"ch_continue_{selected_case_id}",
+                            type="primary",
+                        ):
+                            with st.spinner("Restaurando estado de investigación..."):
+                                _restore_investigation_state(
+                                    settings, run_id, staging_artifact_id,
+                                    analytics_content, ddos_results or None,
+                                )
+                            st.session_state["ch_pending_navigate"] = (
+                                f"Investigación restaurada — ve al tab **WatchGuard S3 Investigation**."
+                            )
+                            st.rerun()
+
+            if msg := st.session_state.pop("ch_pending_navigate", None):
+                st.success(msg)
+
+            if artifacts:
+                with st.expander("Artefactos del caso"):
+                    for art in artifacts:
+                        art_id = art.get("artifact_id", "?")
+                        art_kind = art.get("kind", "?")
+                        art_summary = art.get("summary", "")
+                        st.markdown(f"- **{art_kind}** `{art_id[:12]}...` — {art_summary}")
+
+                        if st.button(f"Ver contenido", key=f"ch_art_{art_id}"):
+                            try:
+                                client = make_client(settings)
+                                content_resp = client.read_artifact_content(artifact_id=art_id)
+                                content = content_resp.get("content", content_resp)
+                                with st.expander(f"Contenido de {art_id[:12]}...", expanded=True):
+                                    st.json(content)
+                            except Exception as exc:
+                                st.error(f"Error leyendo artefacto: {exc}")
 
 
 # ── Tab 2: Phishing Investigation ────────────────────────────────────────────
@@ -946,18 +1895,28 @@ def main() -> None:
 
     settings = render_sidebar()
 
-    tab_wg, tab_ph, tab_imap = st.tabs(
-        ["WatchGuard S3 Investigation", "Phishing Investigation", "Monitor de Email"]
-    )
+    tab_wg, tab_ws, tab_ph, tab_imap, tab_hist = st.tabs([
+        "WatchGuard S3 Investigation",
+        "Workspace Browser",
+        "Phishing Investigation",
+        "Monitor de Email",
+        "Historial de Casos",
+    ])
 
     with tab_wg:
         render_watchguard_tab(settings)
+
+    with tab_ws:
+        render_workspace_browser_tab(settings)
 
     with tab_ph:
         render_phishing_tab(settings)
 
     with tab_imap:
         render_imap_tab(settings)
+
+    with tab_hist:
+        render_case_history_tab(settings)
 
 
 if __name__ == "__main__":

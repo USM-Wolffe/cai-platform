@@ -16,8 +16,8 @@ API HTTP determinista de cai-platform. Expone la superficie pública para gesti�
 # Producción: corre en ECS Fargate detrás del ALB
 # URL: http://cai-platform-alb-*.us-east-2.elb.amazonaws.com
 
-# Local (Docker):
-make up       # levanta en http://localhost:8000
+# Local (Docker Compose):
+make up       # levanta API en http://localhost:8000 y UI en http://localhost:8501
 make health   # verifica el health check
 make down     # baja los contenedores
 
@@ -73,6 +73,13 @@ Si `DATABASE_URL` no está definida, el API usa `InMemoryCaseRepository`, `InMem
 | `POST` | `/runs/{run_id}/observations/watchguard-ingest-workspace-zip` | WatchGuard: ingestión ZIP (en RAM) |
 | `POST` | `/runs/{run_id}/observations/watchguard-stage-workspace-zip` | WatchGuard: staging ZIP → S3 CSVs |
 | `POST` | `/runs/{run_id}/observations/watchguard-duckdb-workspace-analytics` | WatchGuard: analytics DuckDB sobre S3 |
+| `POST` | `/runs/{run_id}/observations/watchguard-ddos-temporal-analysis` | WatchGuard DDoS: serie temporal |
+| `POST` | `/runs/{run_id}/observations/watchguard-ddos-top-destinations` | WatchGuard DDoS: destinos principales |
+| `POST` | `/runs/{run_id}/observations/watchguard-ddos-top-sources` | WatchGuard DDoS: fuentes principales |
+| `POST` | `/runs/{run_id}/observations/watchguard-ddos-segment-analysis` | WatchGuard DDoS: análisis por segmento CIDR |
+| `POST` | `/runs/{run_id}/observations/watchguard-ddos-ip-profile` | WatchGuard DDoS: perfil de IP |
+| `POST` | `/runs/{run_id}/observations/watchguard-ddos-hourly-distribution` | WatchGuard DDoS: distribución horaria |
+| `POST` | `/runs/{run_id}/observations/watchguard-ddos-protocol-breakdown` | WatchGuard DDoS: distribución por protocolo |
 | `POST` | `/runs/{run_id}/observations/phishing-email-basic-assessment` | Phishing: evaluación básica |
 | `POST` | `/runs/{run_id}/observations/phishing-email-header-analysis` | Phishing: análisis de cabeceras |
 | `POST` | `/runs/{run_id}/queries/watchguard-guarded-filtered-rows` | Query guarded (requiere aprobación) |

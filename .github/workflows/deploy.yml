@@ -1,0 +1,168 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+
+env:
+  AWS_REGION: us-east-2
+  ECR_API_URI: 942454901447.dkr.ecr.us-east-2.amazonaws.com/cai-platform/platform-api
+  ECR_UI_URI: 942454901447.dkr.ecr.us-east-2.amazonaws.com/cai-platform/platform-ui
+  ECS_CLUSTER: cai-platform
+
+jobs:
+  test:
+    name: Run tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install and test
+        run: |
+          pip install -e packages/platform-contracts
+          pip install -e packages/platform-core
+          pip install -e packages/platform-adapters
+          pip install -e packages/platform-backends
+          pip install -e "apps/platform-api[test]"
+          pip install -e "apps/cai-orchestrator[test]"
+          python -m pytest tests/ -x -q
+
+  build-and-push-api:
+    name: Build & push platform-api
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.CI_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.CI_AWS_SECRET_ACCESS_KEY }}
+      - uses: aws-actions/amazon-ecr-login@v2
+      - name: Set image tag
+        id: meta
+        run: echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+      - name: Build and push
+        run: |
+          docker build -t $ECR_API_URI:${{ steps.meta.outputs.tag }} \
+            -f apps/platform-api/Dockerfile .
+          docker push $ECR_API_URI:${{ steps.meta.outputs.tag }}
+          docker tag $ECR_API_URI:${{ steps.meta.outputs.tag }} $ECR_API_URI:latest
+          docker push $ECR_API_URI:latest
+
+  build-and-push-ui:
+    name: Build & push platform-ui
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.CI_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.CI_AWS_SECRET_ACCESS_KEY }}
+      - uses: aws-actions/amazon-ecr-login@v2
+      - name: Set image tag
+        id: meta
+        run: echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+      - name: Build and push
+        run: |
+          docker build -t $ECR_UI_URI:${{ steps.meta.outputs.tag }} \
+            -f apps/platform-ui/Dockerfile .
+          docker push $ECR_UI_URI:${{ steps.meta.outputs.tag }}
+          docker tag $ECR_UI_URI:${{ steps.meta.outputs.tag }} $ECR_UI_URI:latest
+          docker push $ECR_UI_URI:latest
+
+  deploy-staging:
+    name: Deploy to staging
+    needs: [build-and-push-api, build-and-push-ui]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.CI_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.CI_AWS_SECRET_ACCESS_KEY }}
+      - name: Deploy API staging
+        run: |
+          aws ecs update-service \
+            --cluster $ECS_CLUSTER \
+            --service platform-api-staging \
+            --desired-count 1 \
+            --force-new-deployment \
+            --region $AWS_REGION
+      - name: Deploy UI staging
+        run: |
+          aws ecs update-service \
+            --cluster $ECS_CLUSTER \
+            --service platform-ui-staging \
+            --desired-count 1 \
+            --force-new-deployment \
+            --region $AWS_REGION
+      - name: Wait for staging stability
+        run: |
+          aws ecs wait services-stable \
+            --cluster $ECS_CLUSTER \
+            --services platform-api-staging \
+            --region $AWS_REGION
+      - name: Smoke test staging
+        run: |
+          ALB="http://cai-platform-alb-472989822.us-east-2.elb.amazonaws.com"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$ALB/staging/health")
+          if [ "$STATUS" != "200" ]; then
+            echo "Staging smoke test failed: /staging/health returned $STATUS"
+            exit 1
+          fi
+          echo "Staging smoke test passed"
+
+  deploy-prod:
+    name: Deploy to production
+    needs: deploy-staging
+    # Only deploy to prod on release (tag v*)
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.CI_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.CI_AWS_SECRET_ACCESS_KEY }}
+      - name: Deploy platform-api prod
+        run: |
+          aws ecs update-service \
+            --cluster $ECS_CLUSTER \
+            --service platform-api \
+            --force-new-deployment \
+            --region $AWS_REGION
+      - name: Deploy platform-ui prod
+        run: |
+          aws ecs update-service \
+            --cluster $ECS_CLUSTER \
+            --service platform-ui \
+            --desired-count 1 \
+            --force-new-deployment \
+            --region $AWS_REGION
+      - name: Wait for prod stability
+        run: |
+          aws ecs wait services-stable \
+            --cluster $ECS_CLUSTER \
+            --services platform-api \
+            --region $AWS_REGION
+      - name: Smoke test prod
+        run: |
+          ALB="http://cai-platform-alb-472989822.us-east-2.elb.amazonaws.com"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$ALB/health")
+          if [ "$STATUS" != "200" ]; then
+            echo "Prod smoke test failed: /health returned $STATUS"
+            exit 1
+          fi
+          echo "Prod smoke test passed"

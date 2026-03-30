@@ -1,0 +1,362 @@
+/* ── EGS Incident Response Report — Print Stylesheet ───────────────────── */
+
+/* ====== Page setup ====== */
+@page {
+  size: A4;
+  margin: 18mm 14mm 18mm 14mm;
+}
+
+html, body {
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 11pt;
+  color: #111;
+}
+body { margin: 0; }
+
+/* ====== Page wrapper ====== */
+.page {
+  page-break-after: always;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  min-height: 260mm;
+  padding-bottom: 14mm;
+  position: relative;
+}
+.page:last-child { page-break-after: auto; }
+
+/* ====== Headings ====== */
+.h1 { font-size: 22pt; font-weight: 700; letter-spacing: .2px; color: #e10600; margin: 0 0 10px 0; }
+.h2 { font-size: 14pt; font-weight: 700; margin: 0 0 10px 0; color: #e10600; }
+.h3 { font-size: 12pt; font-weight: 700; margin: 14px 0 8px 0; color: #111; }
+
+p { margin: 0 0 8px 0; line-height: 1.4; }
+
+/* ====== Cover page ====== */
+.cover {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+  text-align: center;
+  padding-top: 44mm;
+  overflow: hidden;
+  position: relative;
+}
+
+.cover-band {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 46mm;
+}
+
+.cover .logo {
+  width: 300px;
+  margin: 0 auto 14mm auto;
+  display: block;
+}
+
+.cover-title {
+  font-size: 16pt;
+  font-weight: 700;
+  letter-spacing: .3px;
+  color: #111;
+  margin-top: 4mm;
+}
+
+.cover-service {
+  font-size: 13pt;
+  font-weight: 700;
+  color: #111;
+  margin-top: 2mm;
+}
+
+.cover-client {
+  margin-top: 14mm;
+  font-size: 15pt;
+  font-weight: 800;
+  color: #e10600;
+  text-transform: uppercase;
+}
+
+.cover-crm {
+  margin-top: 3mm;
+  font-size: 12pt;
+  font-weight: 700;
+  color: #e10600;
+  text-transform: uppercase;
+}
+
+.cover-period {
+  margin-top: 3mm;
+  font-size: 13pt;
+  font-weight: 700;
+  color: #333;
+}
+
+.cover .conf {
+  margin-top: auto;
+  align-self: center;
+  padding-bottom: 12mm;
+  text-align: center;
+  font-size: 10.5pt;
+}
+.conf .label { font-weight: 700; margin-bottom: 4px; }
+
+/* ====== Page header (logo top-right) ====== */
+.page.with-header { padding-top: 22mm; }
+
+.page-header {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-start;
+}
+
+.logo-small {
+  width: 110px;
+  height: auto;
+  display: block;
+}
+
+/* ====== Footer (per-page, in-document) ====== */
+.footer {
+  margin-top: auto;
+  padding: 8mm 0 0 0;
+  font-size: 9.5pt;
+  color: #333;
+  border-top: 1px solid #ddd;
+}
+
+.footer .row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.footer .contact {
+  line-height: 1.25;
+  text-align: center;
+  flex: 1;
+}
+
+.footer .pageno {
+  min-width: 40px;
+  text-align: right;
+  font-weight: 700;
+}
+
+/* ====== TOC ====== */
+.toc { padding-top: 6mm; }
+.toc ul { list-style: none; padding: 0; margin: 8mm 0 0 0; }
+.toc li {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0;
+  border-bottom: 1px dotted #bbb;
+}
+.toc .left { font-weight: 700; }
+.toc .right { font-weight: 700; }
+.toc li.toc-sub { padding-left: 1.5em; font-size: 10pt; font-weight: normal; }
+.toc li.toc-sub .left { font-weight: normal; }
+
+/* ====== Tables ====== */
+.table-egs {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 6mm;
+  page-break-inside: avoid;
+  font-size: 10.5pt;
+}
+
+.table-egs thead th {
+  background: #e10600;
+  color: #ffffff;
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 10pt;
+  padding: 6px 8px;
+  text-align: left;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+.table-egs.table-grid { border: 1px solid #000; }
+.table-egs.table-grid th,
+.table-egs.table-grid td { border: 1px solid #000; }
+
+.table-egs tbody td {
+  padding: 6px 8px;
+  vertical-align: top;
+  line-height: 1.25;
+}
+
+.table-egs tbody tr:nth-child(even) td { background: #fafafa; }
+
+.table-egs td.num  { text-align: right; font-variant-numeric: tabular-nums; }
+.table-egs td.mono { font-family: 'Courier New', Courier, monospace; font-size: 10pt; }
+.table-egs td.rank { text-align: center; font-weight: 700; color: #555; }
+
+/* Bold first col on grid tables */
+.table-egs.table-grid tbody td:first-child { font-weight: 700; }
+
+/* ====== Info/meta table (2-col key-value, no red header) ====== */
+.table-info {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 4mm;
+  font-size: 10.5pt;
+  border: 1px solid #ccc;
+}
+.table-info td {
+  padding: 5px 8px;
+  border-bottom: 1px solid #eee;
+  vertical-align: top;
+}
+.table-info td:first-child {
+  font-weight: 700;
+  width: 36%;
+  color: #333;
+  border-right: 1px solid #eee;
+}
+
+/* ====== Decision block ====== */
+.decision-block {
+  border: 2px solid #e10600;
+  border-radius: 4px;
+  padding: 10px 14px;
+  margin: 6mm 0;
+  page-break-inside: avoid;
+}
+
+.decision-option {
+  font-size: 15pt;
+  font-weight: 800;
+  color: #e10600;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+/* ====== Severity badges ====== */
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 9pt;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.badge-high   { background: #fde8e8; color: #c53030; border: 1px solid #e10600; }
+.badge-medium { background: #fef3c7; color: #92400e; border: 1px solid #f59e0b; }
+.badge-low    { background: #d1fae5; color: #065f46; border: 1px solid #10b981; }
+
+/* ====== Signal tags ====== */
+.signal-list { display: flex; flex-wrap: wrap; gap: 5px; margin: 4mm 0; }
+.signal-tag {
+  display: inline-block;
+  background: #fde8e8;
+  color: #c53030;
+  border: 1px solid #e10600;
+  border-radius: 3px;
+  padding: 2px 8px;
+  font-size: 9pt;
+  font-weight: 700;
+}
+
+/* ====== KPI cards ====== */
+.kpi-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 8mm 0 0 0;
+}
+.kpi-card {
+  flex: 1;
+  min-width: 130px;
+  border-radius: 8px;
+  padding: 12px 14px;
+  box-sizing: border-box;
+  page-break-inside: avoid;
+}
+.kpi-card-neutral  { background: #f0f2f5; }
+.kpi-card-negative { background: #fef2f2; }
+.kpi-card-number   { font-size: 24pt; font-weight: 800; line-height: 1.1; margin-bottom: 3px; }
+.kpi-card-neutral  .kpi-card-number { color: #111; }
+.kpi-card-negative .kpi-card-number { color: #c53030; }
+.kpi-card-label    { font-size: 10.5pt; font-weight: 700; color: #111; margin-bottom: 2px; }
+.kpi-card-sublabel { font-size: 9pt; color: #555; }
+
+/* ====== Timeline ====== */
+.timeline { margin: 4mm 0; }
+.timeline-entry { display: flex; gap: 8px; margin-bottom: 5px; font-size: 10pt; }
+.timeline-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #e10600;
+  margin-top: 4px;
+}
+.timeline-time { font-size: 8.5pt; color: #666; }
+
+/* ====== Stage status colors ====== */
+.status-completed   { color: #0a7a0a; font-weight: 700; }
+.status-in_progress { color: #b45309; font-weight: 700; }
+
+/* ====== Hourly bar chart ====== */
+.bar-cell { padding: 3px 8px; vertical-align: middle; width: 40%; }
+.bar-track {
+  background: #ececec;
+  border-radius: 2px;
+  height: 9px;
+  width: 100%;
+}
+.bar-fill {
+  background: #e10600;
+  border-radius: 2px;
+  height: 9px;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+/* ====== CAI methodology box ====== */
+.cai-box {
+  border-left: 4px solid #e10600;
+  background: #fafafa;
+  padding: 8px 12px;
+  margin: 6mm 0 4mm 0;
+  font-size: 10pt;
+  line-height: 1.4;
+}
+.cai-box .cai-title {
+  font-weight: 700;
+  color: #e10600;
+  font-size: 10.5pt;
+  margin-bottom: 4px;
+}
+.cai-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 5px;
+}
+.cai-meta-item {
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 3px;
+  padding: 2px 8px;
+  font-size: 9pt;
+  color: #333;
+}
+.cai-meta-item strong { color: #e10600; }
+
+/* ====== Misc ====== */
+.text-muted { color: #666; }
+.mt-sm { margin-top: 4mm; }
+ul.bullets { margin: 4px 0 0 16px; }
+ul.bullets li { margin: 3px 0; line-height: 1.35; }

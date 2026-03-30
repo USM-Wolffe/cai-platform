@@ -1,0 +1,830 @@
+<!doctype html>
+<html lang='es'>
+<head>
+  <meta charset='utf-8' />
+  <title>{{ report_title }}</title>
+  <style>{{ css | safe }}</style>
+</head>
+<body>
+
+<!-- ======================= PAGE 1: COVER ======================= -->
+<section class='page cover'>
+  <svg class='cover-band' viewBox='0 0 1000 260' preserveAspectRatio='none' aria-hidden='true'>
+    <defs>
+      <linearGradient id='gBanda1' x1='0' y1='0' x2='1' y2='0'>
+        <stop offset='0' stop-color='#d41000'></stop>
+        <stop offset='1' stop-color='#c20800'></stop>
+      </linearGradient>
+      <linearGradient id='gBanda3' x1='0' y1='0' x2='1' y2='0'>
+        <stop offset='0' stop-color='#e81800'></stop>
+        <stop offset='1' stop-color='#e01000'></stop>
+      </linearGradient>
+      <linearGradient id='gBanda4' x1='0' y1='0' x2='1' y2='0'>
+        <stop offset='0' stop-color='#ff7a72'></stop>
+        <stop offset='1' stop-color='#ff8f88'></stop>
+      </linearGradient>
+      <linearGradient id='gRosaPalido' x1='0' y1='0' x2='0' y2='1'>
+        <stop offset='0' stop-color='#ffb5b0' stop-opacity='0.5'></stop>
+        <stop offset='0.5' stop-color='#ffd0cc' stop-opacity='0.25'></stop>
+        <stop offset='1' stop-color='#ffffff' stop-opacity='0'></stop>
+      </linearGradient>
+    </defs>
+    <rect x='0' y='0' width='1000' height='260' fill='#ffffff'></rect>
+    <polygon points='0,55 1000,55 1000,115 900,95 0,150' fill='url(#gBanda4)'></polygon>
+    <polygon points='0,40 1000,40 1000,55 0,55' fill='url(#gBanda3)'></polygon>
+    <polygon points='0,25 1000,25 1000,40 0,40' fill='url(#gBanda1)'></polygon>
+    <polygon points='0,0 1000,0 1000,25 0,25' fill='url(#gBanda1)'></polygon>
+    <polygon points='0,150 900,95 1000,115 1000,260 0,260' fill='url(#gRosaPalido)'></polygon>
+    <line x1='-10' y1='250' x2='1020' y2='175' stroke='#7a7a7a' stroke-width='1.5' opacity='0.85'></line>
+  </svg>
+
+  <img class='logo' alt='EGS' src='{{ logo_b64 }}' />
+
+  <div class='cover-title'>SEGURIDAD PERIMETRAL INTEGRAL</div>
+  <div class='cover-service'>Investigación Forense DDoS</div>
+
+  <div class='cover-client'>{{ client_name }}</div>
+  <div class='cover-crm'>{{ crm_case }}</div>
+  <div class='cover-period'>{{ report_date }}</div>
+
+  <div class='conf'>
+    <div class='label'>Nota de Confidencialidad</div>
+    <div>Este documento contiene información confidencial de propiedad de {{ client_name }}</div>
+  </div>
+</section>
+
+
+<!-- ======================= PAGE 2: ÍNDICE ======================= -->
+<section class='page with-header'>
+  <div class='page-header'>
+    <img class='logo-small' alt='EGS' src='{{ logo_b64 }}' />
+  </div>
+
+  <div class='toc'>
+    <div class='h2'>Tabla de contenido</div>
+    <ul>
+      <li><span class='left'>1. Información General</span><span class='right'>3</span></li>
+      <li><span class='left'>2. Resumen Ejecutivo</span><span class='right'>4</span></li>
+      <li><span class='left'>3. Marco Metodológico: NIST SP 800-61</span><span class='right'>5</span></li>
+      <li class='toc-sub'><span class='left'>3.1 Preparación</span><span class='right'>5</span></li>
+      <li class='toc-sub'><span class='left'>3.2 Detección y Análisis</span><span class='right'>6</span></li>
+      <li class='toc-sub'><span class='left'>3.3 Contención, Erradicación y Recuperación</span><span class='right'>10</span></li>
+      <li class='toc-sub'><span class='left'>3.4 Actividades Post-Incidente</span><span class='right'>11</span></li>
+      <li class='toc-sub'><span class='left'>3.5 Estadísticas</span><span class='right'>12</span></li>
+      <li class='toc-sub'><span class='left'>3.6 Conclusiones</span><span class='right'>14</span></li>
+    </ul>
+  </div>
+
+  <div class='footer'>
+    <div class='row'>
+      <div class='contact'>
+        Contacta a requerimientos@egs.cl o<br/>
+        Chile (56-2) 583 0060 - Lima, Perú (51-1) 701 9040<br/>
+        <a href='https://www.egs-latam.com'>www.egs-latam.com</a>
+      </div>
+      <div class='pageno'>2</div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ======================= PAGE 3: INFORMACIÓN GENERAL ======================= -->
+<section class='page with-header'>
+  <div class='page-header'>
+    <img class='logo-small' alt='EGS' src='{{ logo_b64 }}' />
+  </div>
+
+  <div class='h1'>1. Información General</div>
+
+  <table class='table-egs table-grid' style='margin-top:8mm;'>
+    <thead>
+      <tr><th>Campo</th><th>Valor</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Cliente</td><td>{{ client_name }}</td></tr>
+      <tr><td>Caso CRM</td><td>{{ crm_case }}</td></tr>
+      <tr><td>Informante</td><td>{{ informante }}</td></tr>
+      <tr><td>Workspace</td><td>{{ workspace }}</td></tr>
+      <tr><td>Case ID</td><td>{{ case_id }}</td></tr>
+      <tr><td>Período analizado</td><td>{{ date_from }} al {{ date_to }}</td></tr>
+      <tr><td>Total de eventos</td><td>{{ total_events }}</td></tr>
+      <tr><td>Día de mayor actividad</td><td>{{ peak_day }}</td></tr>
+      <tr><td>Severidad</td><td><span class='badge badge-{{ severity }}'>{{ severity | upper }}</span></td></tr>
+      <tr><td>Estrategia aplicada</td><td>{{ strategy }}</td></tr>
+      <tr><td>Fecha del informe</td><td>{{ report_date }}</td></tr>
+    </tbody>
+  </table>
+
+  <div class='footer'>
+    <div class='row'>
+      <div class='contact'>
+        Contacta a requerimientos@egs.cl o<br/>
+        Chile (56-2) 583 0060 - Lima, Perú (51-1) 701 9040<br/>
+        <a href='https://www.egs-latam.com'>www.egs-latam.com</a>
+      </div>
+      <div class='pageno'>3</div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ======================= PAGE 4: RESUMEN EJECUTIVO ======================= -->
+<section class='page with-header'>
+  <div class='page-header'>
+    <img class='logo-small' alt='EGS' src='{{ logo_b64 }}' />
+  </div>
+
+  <div class='h2'>2. Resumen Ejecutivo</div>
+
+  <p><strong>{{ finding_title }}</strong></p>
+  <p>{{ finding_summary }}</p>
+
+  <div class='kpi-cards'>
+    <div class='kpi-card kpi-card-negative'>
+      <div class='kpi-card-number'>{{ total_events }}</div>
+      <div class='kpi-card-label'>Total Eventos</div>
+      <div class='kpi-card-sublabel'>{{ date_from }} – {{ date_to }}</div>
+    </div>
+    <div class='kpi-card kpi-card-negative'>
+      <div class='kpi-card-number'>{{ peak_events }}</div>
+      <div class='kpi-card-label'>Eventos en Día Pico</div>
+      <div class='kpi-card-sublabel'>{{ peak_day }}</div>
+    </div>
+    <div class='kpi-card kpi-card-neutral'>
+      <div class='kpi-card-number'>{{ finding_confidence }}%</div>
+      <div class='kpi-card-label'>Confianza Analítica</div>
+      <div class='kpi-card-sublabel'>Clasificación automática</div>
+    </div>
+  </div>
+
+  <div class='h3' style='margin-top:6mm;'>Señales detectadas</div>
+  <div class='signal-list'>
+    {% for signal in observed_signals %}
+    <span class='signal-tag'>{{ signal }}</span>
+    {% endfor %}
+  </div>
+
+  <div class='h3'>Decisión de contención</div>
+  <p>{{ decision_summary }}</p>
+
+  <div class='footer'>
+    <div class='row'>
+      <div class='contact'>
+        Contacta a requerimientos@egs.cl o<br/>
+        Chile (56-2) 583 0060 - Lima, Perú (51-1) 701 9040<br/>
+        <a href='https://www.egs-latam.com'>www.egs-latam.com</a>
+      </div>
+      <div class='pageno'>4</div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ======================= PAGE 5: 3.1 PREPARACIÓN ======================= -->
+<section class='page with-header'>
+  <div class='page-header'>
+    <img class='logo-small' alt='EGS' src='{{ logo_b64 }}' />
+  </div>
+
+  <div class='h1'>3. Marco Metodológico: NIST SP 800-61</div>
+  <div class='h2'>3.1 Preparación</div>
+
+  <div class='cai-box'>
+    <div class='cai-title'>Investigación ejecutada automáticamente por EGS CAI</div>
+    <div>
+      Este análisis forense fue conducido de forma autónoma por el pipeline multi-agente EGS CAI,
+      sin intervención manual en las fases de recolección, caracterización y síntesis de evidencia.
+      El analista humano revisa y valida el informe generado antes de su entrega.
+    </div>
+    <div class='cai-meta'>
+      <span class='cai-meta-item'>Duración total: <strong>{{ cai_pipeline_duration }}</strong></span>
+      <span class='cai-meta-item'>Etapas completadas: <strong>{{ cai_stages_completed }}</strong></span>
+      <span class='cai-meta-item'>Evidencias recolectadas: <strong>{{ cai_evidence_count }}</strong></span>
+      <span class='cai-meta-item'>Agentes: <strong>{{ cai_agents | join(' → ') }}</strong></span>
+    </div>
+  </div>
+
+  <p>
+    La clasificación automática del incidente asignó la estrategia
+    <strong>{{ strategy }}</strong> basada en las señales observadas.
+  </p>
+
+  <table class='table-egs table-grid' style='margin-top:4mm;'>
+    <thead>
+      <tr><th>Campo</th><th>Valor</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Tipo de incidente</td><td>DDoS / Ataque volumétrico</td></tr>
+      <tr><td>Confianza</td><td>{{ classification_confidence }}%</td></tr>
+      <tr><td>Rationale</td><td>{{ classification_rationale }}</td></tr>
+    </tbody>
+  </table>
+
+  <div class='h3'>Señales observadas al inicio</div>
+  <div class='signal-list'>
+    {% for signal in observed_signals %}
+    <span class='signal-tag'>{{ signal }}</span>
+    {% endfor %}
+  </div>
+
+  <div class='h3'>Progreso de etapas NIST</div>
+  <table class='table-egs table-grid'>
+    <thead>
+      <tr>
+        <th>Etapa</th>
+        <th>Estado</th>
+        <th>Inicio</th>
+        <th>Fin</th>
+        <th>Duración</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for stage in stage_progress %}
+      <tr>
+        <td>{{ stage.label }}</td>
+        <td class='status-{{ stage.status }}'>{{ stage.status }}</td>
+        <td class='mono'>{{ stage.started_fmt }}</td>
+        <td class='mono'>{{ stage.completed_fmt }}</td>
+        <td class='num'>{{ stage.duration }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class='footer'>
+    <div class='row'>
+      <div class='contact'>
+        Contacta a requerimientos@egs.cl o<br/>
+        Chile (56-2) 583 0060 - Lima, Perú (51-1) 701 9040<br/>
+        <a href='https://www.egs-latam.com'>www.egs-latam.com</a>
+      </div>
+      <div class='pageno'>5</div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ======================= PAGE 6: 3.2 DETECCIÓN Y ANÁLISIS ======================= -->
+<section class='page with-header'>
+  <div class='page-header'>
+    <img class='logo-small' alt='EGS' src='{{ logo_b64 }}' />
+  </div>
+
+  <div class='h2'>3.2 Detección y Análisis</div>
+  <div class='h3'>3.2.1 Distribución temporal de eventos</div>
+
+  <p>
+    Se analizaron <strong>{{ total_events }}</strong> eventos entre el {{ date_from }} y el {{ date_to }}.
+    El día de mayor actividad fue <strong>{{ peak_day }}</strong> con {{ peak_events }} eventos.
+  </p>
+
+  {% if by_day %}
+  <table class='table-egs table-grid'>
+    <thead>
+      <tr>
+        <th>Fecha</th>
+        <th class='num'>Eventos</th>
+        <th class='num'>Variación %</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in by_day %}
+      <tr>
+        <td class='mono'>{{ row.date }}</td>
+        <td class='num'>{{ "{:,}".format(row.events) }}</td>
+        <td class='num'>
+          {% if row.variation_pct is not none %}{{ "%.1f"|format(row.variation_pct) }}%{% else %}–{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <div class='h3'>3.2.2 Top 10 IPs de Origen</div>
+  {% if top_sources %}
+  <table class='table-egs table-grid'>
+    <thead>
+      <tr>
+        <th class='num'>#</th>
+        <th>IP Origen</th>
+        <th>Segmento /16</th>
+        <th class='num'>Eventos</th>
+        <th class='num'>% Total</th>
+        <th>Acción top</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for src in top_sources %}
+      <tr>
+        <td class='rank'>{{ src.rank }}</td>
+        <td class='mono'>{{ src.src_ip }}</td>
+        <td class='mono'>{{ src.segment_16 or "–" }}</td>
+        <td class='num'>{{ "{:,}".format(src.events) }}</td>
+        <td class='num'>{{ "%.2f"|format(src.pct) }}%</td>
+        <td>{{ src.top_action or "–" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class='text-muted'>Sin datos de fuentes.</p>
+  {% endif %}
+
+  <div class='footer'>
+    <div class='row'>
+      <div class='contact'>
+        Contacta a requerimientos@egs.cl o<br/>
+        Chile (56-2) 583 0060 - Lima, Perú (51-1) 701 9040<br/>
+        <a href='https://www.egs-latam.com'>www.egs-latam.com</a>
+      </div>
+      <div class='pageno'>6</div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ======================= PAGE 7: TOP DESTINOS ======================= -->
+<section class='page with-header'>
+  <div class='page-header'>
+    <img class='logo-small' alt='EGS' src='{{ logo_b64 }}' />
+  </div>
+
+  <div class='h3'>3.2.3 Top 10 IPs de Destino</div>
+  {% if top_destinations %}
+  <table class='table-egs table-grid'>
+    <thead>
+      <tr>
+        <th class='num'>#</th>
+        <th>IP Destino</th>
+        <th class='num'>Eventos</th>
+        <th class='num'>% Total</th>
+        <th>Política top</th>
+        <th>Acción top</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for dst in top_destinations %}
+      <tr>
+        <td class='rank'>{{ dst.rank }}</td>
+        <td class='mono'>{{ dst.dst_ip }}</td>
+        <td class='num'>{{ "{:,}".format(dst.events) }}</td>
+        <td class='num'>{{ "%.2f"|format(dst.pct) }}%</td>
+        <td>{{ dst.top_policy or "–" }}</td>
+        <td>{{ dst.top_action or "–" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class='text-muted'>Sin datos de destinos.</p>
+  {% endif %}
+
+  <div class='footer'>
+    <div class='row'>
+      <div class='contact'>
+        Contacta a requerimientos@egs.cl o<br/>
+        Chile (56-2) 583 0060 - Lima, Perú (51-1) 701 9040<br/>
+        <a href='https://www.egs-latam.com'>www.egs-latam.com</a>
+      </div>
+      <div class='pageno'>7</div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ======================= PAGE 8: 3.2.4 SEGMENTO DOMINANTE ======================= -->
+<section class='page with-header'>
+  <div class='page-header'>
+    <img class='logo-small' alt='EGS' src='{{ logo_b64 }}' />
+  </div>
+
+  <div class='h3'>3.2.4 Análisis del Segmento Dominante{% if seg_has_data %} ({{ seg_segment }}){% endif %}</div>
+
+  {% if seg_has_data %}
+  <table class='table-egs table-grid' style='margin-top:4mm;'>
+    <thead>
+      <tr><th>Campo</th><th>Valor</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Segmento /16</td><td class='mono'>{{ seg_segment }}</td></tr>
+      <tr><td>Total de eventos</td><td class='num'>{{ seg_total_events }}</td></tr>
+      <tr><td>Eventos permitidos</td><td class='num'>{{ seg_allow_events }}</td></tr>
+      <tr><td>Eventos denegados</td><td class='num'>{{ seg_deny_events }}</td></tr>
+    </tbody>
+  </table>
+
+  {% if seg_top_dst_ports %}
+  <div class='h3' style='margin-top:5mm;'>Top puertos destino del segmento</div>
+  <table class='table-egs table-grid'>
+    <thead>
+      <tr>
+        <th>Puerto</th>
+        <th>Protocolo</th>
+        <th class='num'>Eventos</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in seg_top_dst_ports %}
+      <tr>
+        <td class='mono'>{{ row.port or "–" }}</td>
+        <td class='mono'>{{ row.protocol or "–" }}</td>
+        <td class='num'>{{ "{:,}".format(row.events) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if seg_top_policies %}
+  <div class='h3'>Políticas más afectadas</div>
+  <table class='table-egs table-grid'>
+    <thead>
+      <tr>
+        <th>Política</th>
+        <th class='num'>Eventos</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in seg_top_policies %}
+      <tr>
+        <td>{{ row.policy or "–" }}</td>
+        <td class='num'>{{ "{:,}".format(row.events) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% else %}
+  <p class='text-muted'>Sin datos de análisis de segmento.</p>
+  {% endif %}
+
+  <div class='footer'>
+    <div class='row'>
+      <div class='contact'>
+        Contacta a requerimientos@egs.cl o<br/>
+        Chile (56-2) 583 0060 - Lima, Perú (51-1) 701 9040<br/>
+        <a href='https://www.egs-latam.com'>www.egs-latam.com</a>
+      </div>
+      <div class='pageno'>8</div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ======================= PAGE 9: 3.2.5 PERFIL DEL ATACANTE ======================= -->
+<section class='page with-header'>
+  <div class='page-header'>
+    <img class='logo-small' alt='EGS' src='{{ logo_b64 }}' />
+  </div>
+
+  <div class='h3'>3.2.5 Perfil del Atacante Principal{% if ip_prof_has_data %} ({{ ip_prof_ip }}){% endif %}</div>
+
+  {% if ip_prof_has_data %}
+  <table class='table-egs table-grid' style='margin-top:4mm;'>
+    <thead>
+      <tr><th>Campo</th><th>Valor</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>IP Origen</td><td class='mono'>{{ ip_prof_ip }}</td></tr>
+      <tr><td>Total de eventos</td><td class='num'>{{ ip_prof_total }}</td></tr>
+      <tr><td>Eventos permitidos</td><td class='num'>{{ ip_prof_allow }}</td></tr>
+      <tr><td>Eventos denegados</td><td class='num'>{{ ip_prof_deny }}</td></tr>
+      <tr><td>Primera actividad</td><td class='mono'>{{ ip_prof_first_seen }}</td></tr>
+      <tr><td>Última actividad</td><td class='mono'>{{ ip_prof_last_seen }}</td></tr>
+    </tbody>
+  </table>
+
+  {% if ip_prof_top_ports %}
+  <div class='h3' style='margin-top:5mm;'>Top puertos atacados</div>
+  <table class='table-egs table-grid'>
+    <thead>
+      <tr>
+        <th>Puerto</th>
+        <th>Protocolo</th>
+        <th>Acción</th>
+        <th class='num'>Eventos</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in ip_prof_top_ports %}
+      <tr>
+        <td class='mono'>{{ row.port or "–" }}</td>
+        <td class='mono'>{{ row.protocol or "–" }}</td>
+        <td>{{ row.action or "–" }}</td>
+        <td class='num'>{{ "{:,}".format(row.events) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if ip_prof_top_policies %}
+  <div class='h3'>Políticas activadas por este atacante</div>
+  <table class='table-egs table-grid'>
+    <thead>
+      <tr>
+        <th>Política</th>
+        <th class='num'>Eventos</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in ip_prof_top_policies %}
+      <tr>
+        <td>{{ row.policy or "–" }}</td>
+        <td class='num'>{{ "{:,}".format(row.events) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% else %}
+  <p class='text-muted'>Sin datos de perfil de atacante.</p>
+  {% endif %}
+
+  <div class='footer'>
+    <div class='row'>
+      <div class='contact'>
+        Contacta a requerimientos@egs.cl o<br/>
+        Chile (56-2) 583 0060 - Lima, Perú (51-1) 701 9040<br/>
+        <a href='https://www.egs-latam.com'>www.egs-latam.com</a>
+      </div>
+      <div class='pageno'>9</div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ======================= PAGE 10: 3.3 CONTENCIÓN ======================= -->
+<section class='page with-header'>
+  <div class='page-header'>
+    <img class='logo-small' alt='EGS' src='{{ logo_b64 }}' />
+  </div>
+
+  <div class='h2'>3.3 Contención, Erradicación y Recuperación</div>
+
+
+  <p>
+    Basado en el análisis forense realizado, se determinó la siguiente recomendación de contención.
+    Esta sección refleja las conclusiones analíticas del equipo investigador; la implementación
+    de las acciones en el Firebox queda a cargo del equipo operativo del cliente.
+  </p>
+
+  <div class='decision-block'>
+    <div class='decision-option'>Decisión: {{ decision_option | upper }}</div>
+    <div>{{ decision_rationale }}</div>
+    {% if decision_alternatives %}
+    <div style='margin-top:6px; font-size:10pt; color:#555;'>
+      Alternativas evaluadas: {{ decision_alternatives | join(", ") }}
+    </div>
+    {% endif %}
+  </div>
+
+  <div class='h3'>Evidencia que sustenta la decisión</div>
+  <p>{{ decision_summary }}</p>
+
+  <table class='table-egs table-grid' style='margin-top:4mm;'>
+    <thead>
+      <tr><th>Campo</th><th>Valor</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Hallazgo asociado</td><td>{{ finding_title }}</td></tr>
+      <tr><td>Severidad</td><td><span class='badge badge-{{ finding_severity }}'>{{ finding_severity | upper }}</span></td></tr>
+      <tr><td>Confianza analítica</td><td>{{ finding_confidence }}%</td></tr>
+      <tr><td>Detectado</td><td>{{ finding_created }}</td></tr>
+    </tbody>
+  </table>
+
+  <div class='footer'>
+    <div class='row'>
+      <div class='contact'>
+        Contacta a requerimientos@egs.cl o<br/>
+        Chile (56-2) 583 0060 - Lima, Perú (51-1) 701 9040<br/>
+        <a href='https://www.egs-latam.com'>www.egs-latam.com</a>
+      </div>
+      <div class='pageno'>10</div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ======================= PAGE 11: 3.4 POST-INCIDENTE ======================= -->
+<section class='page with-header'>
+  <div class='page-header'>
+    <img class='logo-small' alt='EGS' src='{{ logo_b64 }}' />
+  </div>
+
+  <div class='h2'>3.4 Actividades Post-Incidente y Lecciones Aprendidas</div>
+
+  <div class='h3'>Resumen del hallazgo</div>
+  <p>{{ finding_summary }}</p>
+
+  <div class='h3'>Cronología del análisis</div>
+  <div class='timeline'>
+    {% for entry in timeline %}
+    <div class='timeline-entry'>
+      <div class='timeline-dot'></div>
+      <div>
+        <div class='timeline-time'>{{ entry.created_fmt }}</div>
+        <div>{{ entry.summary }}</div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class='h3'>Recomendaciones para prevención</div>
+  <ul class='bullets'>
+    <li>Implementar reglas de rate-limiting por segmento /16 en el Firebox para detectar picos de tráfico.</li>
+    <li>Configurar alertas automáticas cuando un solo origen supere el 5% del tráfico total.</li>
+    <li>Revisar y documentar las políticas activas hacia los destinos más afectados.</li>
+    <li>Considerar la implementación de scrubbing de tráfico ante ataques volumétricos futuros.</li>
+  </ul>
+
+  <div class='footer'>
+    <div class='row'>
+      <div class='contact'>
+        Contacta a requerimientos@egs.cl o<br/>
+        Chile (56-2) 583 0060 - Lima, Perú (51-1) 701 9040<br/>
+        <a href='https://www.egs-latam.com'>www.egs-latam.com</a>
+      </div>
+      <div class='pageno'>11</div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ======================= PAGE 12: 3.5 ESTADÍSTICAS ======================= -->
+<section class='page with-header'>
+  <div class='page-header'>
+    <img class='logo-small' alt='EGS' src='{{ logo_b64 }}' />
+  </div>
+
+  <div class='h2'>3.5 Estadísticas</div>
+
+  <div class='h3'>Distribución por protocolo</div>
+  {% if protocols %}
+  <table class='table-egs table-grid'>
+    <thead>
+      <tr>
+        <th class='num'>#</th>
+        <th>Protocolo</th>
+        <th class='num'>Eventos</th>
+        <th class='num'>% Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for proto in protocols %}
+      <tr>
+        <td class='rank'>{{ proto.rank }}</td>
+        <td class='mono'>{{ proto.protocol or "–" }}</td>
+        <td class='num'>{{ "{:,}".format(proto.events) }}</td>
+        <td class='num'>{{ "%.2f"|format(proto.pct) }}%</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class='text-muted'>Sin datos de protocolo.</p>
+  {% endif %}
+
+  <div class='h3'>Distribución horaria — día pico ({{ hourly_date }})</div>
+  {% if by_hour %}
+  <table class='table-egs table-grid'>
+    <thead>
+      <tr>
+        <th class='num'>Hora (UTC)</th>
+        <th class='num'>Eventos</th>
+        <th>Distribución</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in by_hour %}
+      <tr>
+        <td class='num mono'>{{ "%02d:00"|format(row.hour) }}</td>
+        <td class='num'>{{ "{:,}".format(row.events) }}</td>
+        <td class='bar-cell'>
+          <div class='bar-track'><div class='bar-fill' style='width:{{ row.bar_pct }}%'></div></div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class='text-muted mt-sm' style='font-size:8.5pt;'>
+    Patrón: <strong>{{ hourly_pattern }}</strong> &mdash;
+    pico a las {{ "%02d:00"|format(hourly_peak_hour) if hourly_peak_hour is not none else "–" }} UTC
+    con {{ hourly_peak_events }} eventos.
+  </p>
+  {% else %}
+  <p class='text-muted'>Sin datos de distribución horaria.</p>
+  {% endif %}
+
+  <div class='footer'>
+    <div class='row'>
+      <div class='contact'>
+        Contacta a requerimientos@egs.cl o<br/>
+        Chile (56-2) 583 0060 - Lima, Perú (51-1) 701 9040<br/>
+        <a href='https://www.egs-latam.com'>www.egs-latam.com</a>
+      </div>
+      <div class='pageno'>12</div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ======================= PAGE 13: SEGMENTOS ======================= -->
+<section class='page with-header'>
+  <div class='page-header'>
+    <img class='logo-small' alt='EGS' src='{{ logo_b64 }}' />
+  </div>
+
+  <div class='h3'>Top 5 segmentos /16 de origen</div>
+  {% if top_segments %}
+  <table class='table-egs table-grid'>
+    <thead>
+      <tr>
+        <th>Segmento /16</th>
+        <th class='num'>Eventos</th>
+        <th class='num'>% Total</th>
+        <th class='num'>IPs distintas</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for seg in top_segments %}
+      <tr>
+        <td class='mono'>{{ seg.segment }}</td>
+        <td class='num'>{{ "{:,}".format(seg.events) }}</td>
+        <td class='num'>{{ "%.2f"|format(seg.pct) }}%</td>
+        <td class='num'>{{ seg.ip_count }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class='text-muted'>Sin datos de segmentos.</p>
+  {% endif %}
+
+  <div class='footer'>
+    <div class='row'>
+      <div class='contact'>
+        Contacta a requerimientos@egs.cl o<br/>
+        Chile (56-2) 583 0060 - Lima, Perú (51-1) 701 9040<br/>
+        <a href='https://www.egs-latam.com'>www.egs-latam.com</a>
+      </div>
+      <div class='pageno'>13</div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ======================= PAGE 14: 3.6 CONCLUSIONES ======================= -->
+<section class='page with-header'>
+  <div class='page-header'>
+    <img class='logo-small' alt='EGS' src='{{ logo_b64 }}' />
+  </div>
+
+  <div class='h2'>3.6 Conclusiones</div>
+
+  <div class='decision-block'>
+    <div class='decision-option'>{{ finding_title }}</div>
+    <p>{{ finding_summary }}</p>
+  </div>
+
+  <table class='table-egs table-grid' style='margin-top:4mm;'>
+    <thead>
+      <tr><th>Campo</th><th>Valor</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Severidad</td><td><span class='badge badge-{{ finding_severity }}'>{{ finding_severity | upper }}</span></td></tr>
+      <tr><td>Confianza</td><td>{{ finding_confidence }}%</td></tr>
+      <tr><td>Período del ataque</td><td>{{ date_from }} – {{ date_to }}</td></tr>
+      <tr><td>Día de mayor impacto</td><td>{{ peak_day }}</td></tr>
+      <tr><td>Total de eventos</td><td>{{ total_events }}</td></tr>
+      <tr><td>Recomendación</td><td>{{ decision_option | upper }}</td></tr>
+    </tbody>
+  </table>
+
+  <p class='mt-sm'>{{ decision_rationale }}</p>
+
+  <p class='mt-sm text-muted' style='font-size:8.5pt;'>
+    Este informe fue generado automáticamente por la plataforma EGS CAI
+    a partir del análisis forense del workspace <strong>{{ workspace }}</strong>.
+    Case ID: <code>{{ case_id }}</code>.
+    Generado el {{ generation_date }}.
+  </p>
+
+  <div class='footer'>
+    <div class='row'>
+      <div class='contact'>
+        Contacta a requerimientos@egs.cl o<br/>
+        Chile (56-2) 583 0060 - Lima, Perú (51-1) 701 9040<br/>
+        <a href='https://www.egs-latam.com'>www.egs-latam.com</a>
+      </div>
+      <div class='pageno'>14</div>
+    </div>
+  </div>
+</section>
+
+</body>
+</html>

@@ -205,11 +205,20 @@ def run_cli(argv: list[str] | None = None) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
 
+    if args.command == "run-ddos-investigate":
+        return _run_ddos_investigate_command(args)
+
     if args.command == "run-phishing-monitor":
         return _run_phishing_monitor_command(args)
 
     if args.command == "run-phishing-investigate":
         return _run_phishing_investigate_command(args)
+
+    if args.command == "report-collect":
+        return _run_report_collect_command(args)
+
+    if args.command == "report-generate":
+        return _run_report_generate_command(args)
 
     if args.command not in {
         "run-watchguard",
@@ -343,6 +352,44 @@ def build_cai_watchguard_agent(
         session=session,
         model=model,
     )
+
+
+def _run_ddos_investigate_command(args: argparse.Namespace) -> int:
+    """Handle the run-ddos-investigate CLI command (hybrid pipeline)."""
+    import asyncio
+
+    from cai_orchestrator.ddos_agents import run_ddos_investigation
+
+    settings = load_cai_integration_settings()
+    api_base_url = args.api_base_url or settings.platform_api_base_url
+    model = getattr(args, "model", None) or settings.cai_model
+    try:
+        result = asyncio.run(
+            run_ddos_investigation(
+                workspace_id=args.workspace_id,
+                platform_api_base_url=api_base_url,
+                model=model,
+            )
+        )
+    except MissingCaiDependencyError as exc:
+        _print_error({"error": {"type": "missing_cai_dependency", "message": str(exc)}})
+        return 1
+    except ValueError as exc:
+        _print_error({"error": {"type": "pipeline_setup_failed", "message": str(exc)}})
+        return 1
+    except Exception as exc:  # noqa: BLE001
+        from cai_orchestrator.errors import PlatformApiRequestError, PlatformApiUnavailableError
+
+        if isinstance(exc, PlatformApiUnavailableError):
+            _print_error({"error": {"type": "platform_api_unavailable", "message": str(exc)}})
+        elif isinstance(exc, PlatformApiRequestError):
+            _print_error({"error": {"type": "platform_api_request_failed", "message": str(exc)}})
+        else:
+            raise
+        return 1
+
+    print(result)
+    return 0
 
 
 def _run_phishing_investigate_command(args: argparse.Namespace) -> int:
@@ -508,6 +555,63 @@ def _run_phishing_monitor_command(args: argparse.Namespace) -> int:
     while True:
         _process_once()
         time.sleep(settings.poll_interval)
+
+
+def _run_report_collect_command(args: argparse.Namespace) -> int:
+    """Fetch artifact payloads from platform-api and save case-XXXX-report.json."""
+    from cai_orchestrator.report.collect import collect_report_data
+
+    api_base_url = args.api_base_url or get_platform_api_base_url()
+    try:
+        out_path = collect_report_data(
+            case_id=args.case_id,
+            platform_api_base_url=api_base_url,
+        )
+    except FileNotFoundError as exc:
+        _print_error({"error": {"type": "case_not_found", "message": str(exc)}})
+        return 1
+    except Exception as exc:  # noqa: BLE001
+        from cai_orchestrator.errors import PlatformApiRequestError, PlatformApiUnavailableError
+
+        if isinstance(exc, PlatformApiUnavailableError):
+            error_type = "platform_api_unavailable"
+        elif isinstance(exc, PlatformApiRequestError):
+            error_type = "platform_api_request_failed"
+        else:
+            raise
+        _print_error({"error": {"type": error_type, "message": str(exc)}})
+        return 1
+
+    print(json.dumps({"status": "ok", "output": str(out_path)}, indent=2))
+    return 0
+
+
+def _run_report_generate_command(args: argparse.Namespace) -> int:
+    """Render case-XXXX-report.json to an HTML or PDF file."""
+    from pathlib import Path
+
+    from cai_orchestrator.report.generate import generate_report
+
+    fmt = args.format
+    output_path = Path(args.output) if args.output else None
+    try:
+        out_path = generate_report(
+            case_id=args.case_id,
+            client_name=args.client,
+            informante=args.informante,
+            crm_case=args.crm_case,
+            output_path=output_path,
+            fmt=fmt,
+        )
+    except FileNotFoundError as exc:
+        _print_error({"error": {"type": "report_data_not_found", "message": str(exc)}})
+        return 1
+    except RuntimeError as exc:
+        _print_error({"error": {"type": "report_generation_failed", "message": str(exc)}})
+        return 1
+
+    print(json.dumps({"status": "ok", "output": str(out_path)}, indent=2))
+    return 0
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -723,6 +827,49 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Override the platform-api base URL. Defaults to PLATFORM_API_BASE_URL or http://127.0.0.1:8000.",
     )
+
+    ddos_investigate = subparsers.add_parser(
+        "run-ddos-investigate",
+        help="Run the hybrid DDoS investigation pipeline (requires CAI extra + platform-api running).",
+    )
+    ddos_investigate.add_argument(
+        "--workspace-id",
+        required=True,
+        help="WatchGuard workspace ID to investigate (must have a recent ZIP upload in S3).",
+    )
+    ddos_investigate.add_argument(
+        "--model",
+        default=None,
+        help="Override CAI_MODEL for this investigation (e.g. bedrock/...).",
+    )
+    ddos_investigate.add_argument(
+        "--api-base-url",
+        default=None,
+        help="Override the platform-api base URL. Defaults to PLATFORM_API_BASE_URL or http://127.0.0.1:8000.",
+    )
+
+    report_collect = subparsers.add_parser(
+        "report-collect",
+        help="Collect artifact payloads for a DDoS case report (requires platform-api running).",
+    )
+    report_collect.add_argument("case_id", help="Case ID, e.g. case-0009e49b2476")
+    report_collect.add_argument(
+        "--api-base-url",
+        default=None,
+        help="Override the platform-api base URL. Defaults to PLATFORM_API_BASE_URL or http://127.0.0.1:8000.",
+    )
+
+    report_generate = subparsers.add_parser(
+        "report-generate",
+        help="Generate a PDF report from a collected DDoS case (offline, no platform-api needed).",
+    )
+    report_generate.add_argument("case_id", help="Case ID, e.g. case-0009e49b2476")
+    report_generate.add_argument("--client", required=True, help="Client display name (e.g. 'Productos Fernández').")
+    report_generate.add_argument("--informante", required=True, help="Name of the person requesting the report.")
+    report_generate.add_argument("--crm-case", required=True, help="CRM/ticket reference (e.g. 'LL-IR-PFALIMENTOS-2024-001').")
+    report_generate.add_argument("--format", default="html", choices=["html", "pdf"], help="Output format (default: html).")
+    report_generate.add_argument("--output", default=None, help="Output file path. Defaults to .egs_cases/<case_id>-report.{format}.")
+
     return parser
 
 

@@ -216,6 +216,103 @@ class PlatformApiToolService:
             input_artifact_id=input_artifact_id,
         )
 
+    def execute_watchguard_ddos_temporal_analysis(
+        self,
+        *,
+        run_id: str,
+        requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.platform_api_client.execute_watchguard_ddos_temporal_analysis(
+            run_id=run_id,
+            requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
+        )
+
+    def execute_watchguard_ddos_top_destinations(
+        self,
+        *,
+        run_id: str,
+        requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.platform_api_client.execute_watchguard_ddos_top_destinations(
+            run_id=run_id,
+            requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
+        )
+
+    def execute_watchguard_ddos_top_sources(
+        self,
+        *,
+        run_id: str,
+        requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.platform_api_client.execute_watchguard_ddos_top_sources(
+            run_id=run_id,
+            requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
+        )
+
+    def execute_watchguard_ddos_segment_analysis(
+        self,
+        *,
+        run_id: str,
+        segment: str,
+        requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.platform_api_client.execute_watchguard_ddos_segment_analysis(
+            run_id=run_id,
+            segment=segment,
+            requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
+        )
+
+    def execute_watchguard_ddos_ip_profile(
+        self,
+        *,
+        run_id: str,
+        ip: str,
+        requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.platform_api_client.execute_watchguard_ddos_ip_profile(
+            run_id=run_id,
+            ip=ip,
+            requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
+        )
+
+    def execute_watchguard_ddos_hourly_distribution(
+        self,
+        *,
+        run_id: str,
+        date: str,
+        requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.platform_api_client.execute_watchguard_ddos_hourly_distribution(
+            run_id=run_id,
+            date=date,
+            requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
+        )
+
+    def execute_watchguard_ddos_protocol_breakdown(
+        self,
+        *,
+        run_id: str,
+        requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.platform_api_client.execute_watchguard_ddos_protocol_breakdown(
+            run_id=run_id,
+            requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
+        )
+
     def execute_watchguard_duckdb_workspace_query(
         self,
         *,

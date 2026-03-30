@@ -9,9 +9,10 @@ Referencia práctica para operadores y desarrolladores. Comandos de administraci
 | Componente | Cómo corre |
 |---|---|
 | `platform-api` | ECS Fargate (producción) / Docker Compose (local) |
+| `platform-ui` | ECS Fargate (producción) / Docker Compose o `streamlit run` (local) |
 | `cai-orchestrator` | Host-run como CLI. No está containerizado. |
 | `packages/*` | Librerías instalables. No son servicios. |
-| PostgreSQL | RDS `cai-platform-db` (producción) / in-memory (local/tests) |
+| PostgreSQL | RDS (producción, vía `DATABASE_URL`) / in-memory (local/tests) |
 
 ---
 
@@ -43,8 +44,8 @@ make install-dev
 . .venv/bin/activate
 set -a && . .env && set +a
 
-make build   # construye imagen Docker del API
-make up      # levanta API en http://localhost:8000
+make build   # construye imágenes Docker de API y UI
+make up      # levanta API en http://localhost:8000 y UI en http://localhost:8501
 make health  # GET /health → debe retornar {"status": "ok"}
 
 python3 -m cai_orchestrator run-watchguard \
@@ -88,18 +89,7 @@ python3 -m cai_orchestrator run-watchguard \
 
 ## Deploy en AWS
 
-### Build y push de imagen
-
-```bash
-make ecr-push    # build + tag + push al ECR (cai-platform-api)
-```
-
-### Forzar nuevo deployment en ECS
-
-```bash
-make ecs-deploy  # fuerza nuevo deployment del servicio ECS
-make health      # verifica que el servicio levantó
-```
+La guía de despliegue y CI/CD vive en [`docs/operations/deploy-aws.md`](deploy-aws.md). Este README resume la operación diaria; no inventa targets que no existen en el `Makefile`.
 
 ### Verificar logs del servicio
 
@@ -110,9 +100,9 @@ aws logs tail /ecs/cai-platform-api --follow --region us-east-2
 ### Ver tareas ECS activas
 
 ```bash
-aws ecs list-tasks --cluster cai-platform-cluster --region us-east-2
+aws ecs list-tasks --cluster cai-platform --region us-east-2
 aws ecs describe-tasks \
-  --cluster cai-platform-cluster \
+  --cluster cai-platform \
   --tasks <task-arn> \
   --region us-east-2
 ```
@@ -123,11 +113,11 @@ aws ecs describe-tasks \
 
 | Recurso | Identificador |
 |---|---|
-| ALB | `cai-platform-alb` — `cai-platform-alb-472989822.us-east-2.elb.amazonaws.com` |
-| ECS Cluster | `cai-platform-cluster` |
-| ECS Service | `cai-platform-service` |
-| ECR Repository | `cai-platform-api` |
-| RDS (PostgreSQL 16) | `cai-platform-db.c9ow4kqay2rx.us-east-2.rds.amazonaws.com` |
+| ALB | Obtener con `terraform -chdir=infrastructure/terraform output -raw alb_dns` |
+| ECS Cluster | `cai-platform` |
+| ECS Services | `platform-api`, `platform-ui` |
+| ECR Repositories | `platform-api`, `platform-ui` |
+| RDS (PostgreSQL 16) | Obtener con `terraform -chdir=infrastructure/terraform output -raw rds_endpoint` |
 | DB Name / User | `caiplatform` / `caiplatform` |
 | Secrets Manager | `cai-platform/db-credentials` |
 | S3 Bucket | `egslatam-cai-dev` |
@@ -219,7 +209,9 @@ aws secretsmanager get-secret-value \
   --region us-east-2 \
   --query SecretString --output text
 
-psql -h cai-platform-db.c9ow4kqay2rx.us-east-2.rds.amazonaws.com \
+RDS_ENDPOINT=$(terraform -chdir=infrastructure/terraform output -raw rds_endpoint)
+
+psql -h "$RDS_ENDPOINT" \
      -U caiplatform -d caiplatform
 ```
 
@@ -245,16 +237,14 @@ SELECT client_id, COUNT(*) FROM cases GROUP BY client_id;
 ```bash
 make install-dev     # instalar todos los paquetes en modo editable (contribuidores)
 make test            # correr tests completos
-make test-fast       # tests rápidos (sin marcadores slow)
-make lint            # ruff + mypy
-make build           # build imagen Docker del API
-make up              # levantar API local (docker compose up)
+make build           # build imágenes Docker de API y UI
+make up              # levantar API y UI locales (docker compose up)
 make down            # bajar contenedores
 make health          # GET /health contra PLATFORM_API_BASE_URL
 make api-dev         # uvicorn con hot-reload (sin Docker)
-make ecr-push        # build + push imagen al ECR
-make ecs-deploy      # forzar nuevo deployment ECS
 make demo-watchguard      # smoke test WatchGuard
 make demo-phishing-email  # smoke test phishing
 make upload-workspace ZIP=... WORKSPACE=...  # subir ZIP WatchGuard a S3
+make ecs-stop        # scale a 0 los servicios ECS
+make ecs-start       # devolver los servicios ECS a 1
 ```

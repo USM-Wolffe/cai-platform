@@ -1,6 +1,6 @@
 """Case and artifact routes."""
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from platform_contracts import Artifact
 from platform_core import attach_artifact_ref_to_case, create_case
 
@@ -12,6 +12,20 @@ from platform_api.schemas import (
 )
 
 router = APIRouter(prefix="/cases", tags=["cases"])
+
+
+@router.get("")
+def list_cases_endpoint(
+    client_id: str = Query(..., description="Filter cases by client_id"),
+    runtime: AppRuntime = Depends(get_runtime),
+) -> dict[str, object]:
+    cases = runtime.case_repository.list_cases_by_client(client_id)
+    return {
+        "cases": [
+            serialize_case_summary(case=c, artifacts=runtime.get_case_artifacts(c))
+            for c in cases
+        ]
+    }
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)

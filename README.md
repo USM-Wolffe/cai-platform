@@ -86,12 +86,12 @@ Internet
 ALB (Application Load Balancer)
     │  cai-platform-alb-*.us-east-2.elb.amazonaws.com
     ▼
-ECS Fargate (cai-platform-service)
-    │  Task: cai-platform-api  ← imagen desde ECR
+ECS Fargate (`platform-api` + `platform-ui`)
+    │  Tasks desde ECR
     │  DATABASE_URL → RDS
     │  DB_CREDENTIALS ← Secrets Manager
     ▼
-RDS PostgreSQL (cai-platform-db)
+RDS PostgreSQL
     │  db.t3.micro, caiplatform DB
     ▼
 (Backends lean about S3)
@@ -122,7 +122,7 @@ cai-platform/
 ├── examples/
 │   ├── watchguard/            # Payload de ejemplo WatchGuard
 │   └── phishing/              # Payload de ejemplo phishing
-├── docker-compose.yml
+├── compose.yml
 ├── Makefile
 ├── .env                       # Variables de entorno (no commitear)
 └── CLAUDE.md                  # Guía para Claude Code
@@ -152,17 +152,20 @@ cai-platform/
 git clone <repo-url>
 cd cai-platform
 
-# 2. Crear entorno virtual
+# 2. Dependencias del sistema (requeridas para generación de PDF con WeasyPrint)
+sudo apt-get install -y libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf2.0-0 libcairo2
+
+# 3. Crear entorno virtual
 python3 -m venv .venv
 . .venv/bin/activate
 
-# 3. Instalar el orquestador CLI (mínimo necesario para correr investigaciones)
+# 4. Instalar el orquestador CLI (mínimo necesario para correr investigaciones)
 pip install -e apps/cai-orchestrator
 
-# 4. (Opcional) Instalar con soporte CAI para la terminal interactiva
+# 5. (Opcional) Instalar con soporte CAI para la terminal interactiva
 pip install -e 'apps/cai-orchestrator[cai]'
 
-# 5. Copiar y editar variables de entorno
+# 6. Copiar y editar variables de entorno
 cp .env.example .env
 # editar .env con tus credenciales AWS, IMAP, etc.
 ```
@@ -173,7 +176,7 @@ El API corre en Docker (apunta al ALB en producción, o local con `make up`):
 # Producción: ya está corriendo en AWS, ver PLATFORM_API_BASE_URL en .env
 
 # Local (desarrollo):
-make up         # levanta platform-api en http://localhost:8000
+make up         # levanta platform-api en http://localhost:8000 y platform-ui en http://localhost:8501
 make health     # verifica que responda
 ```
 
@@ -207,7 +210,17 @@ Copiar `.env.example` → `.env` y completar:
 
 `platform-ui` es una interfaz web que envuelve el orquestador y elimina la fricción de la CLI. No reemplaza el CLI ni el API — es una capa de presentación pura que llama a los mismos flujos internamente.
 
-### Instalación de la UI
+### Acceso en la nube
+
+La UI está desplegada en ECS y accesible sin instalación:
+
+```
+http://cai-platform-alb-472989822.us-east-2.elb.amazonaws.com/ui
+```
+
+> **Nota de seguridad:** el ALB es público. Cualquiera con el link tiene acceso completo. Compartir solo con analistas de EGS hasta implementar autenticación (ver `docs/architecture/pendientes.md` ítem 5).
+
+### Instalación local (desarrollo)
 
 ```bash
 # Sin soporte CAI (solo pipeline determinista)
@@ -409,7 +422,6 @@ La terminal CAI lanza un agente conversacional (`egs-analist`) con acceso comple
 
 ```bash
 python3 -m cai_orchestrator run-cai-terminal \
-  --client-id "cliente-abc" \
   --model "bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0" \
   --prompt "Analiza el workspace 8011029C760FA. Busca el ZIP más reciente, crea el caso, estágealo y dime los top IPs con más tráfico denegado."
 ```
@@ -417,7 +429,7 @@ python3 -m cai_orchestrator run-cai-terminal \
 El agente `egs-analist` puede:
 - Crear casos y runs (`create_case`, `create_run`)
 - Ejecutar cualquier observación disponible en los backends
-- Hacer handoff al agente especializado `phishing_investigator_agent`
+- Hacer handoff al agente especializado `phishing_investigator`
 - Consultar artefactos y resultados previos
 
 **Tipos de agente disponibles** (`CAI_AGENT_TYPE`):
@@ -425,7 +437,8 @@ El agente `egs-analist` puede:
 |---|---|
 | `egs-analist` | Agente general de investigación (default). Puede delegar a phishing. |
 | `platform_investigation_agent` | Alias de `egs-analist` |
-| `phishing_investigator_agent` | Pipeline multi-agente de phishing directamente |
+| `phishing_investigator` | Pipeline multi-agente de phishing directamente |
+| `ddos_investigator` | Pipeline híbrido DDoS sobre workspaces staged en S3 |
 
 ---
 
@@ -483,7 +496,7 @@ RUN=$(curl -s -X POST $BASE/cases/$CASE_ID/runs \
 RUN_ID=$(echo $RUN | python3 -c "import sys,json; print(json.load(sys.stdin)['run_id'])")
 
 # 4. Ejecutar observación
-curl -s -X POST $BASE/runs/$RUN_ID/observations/phishing-basic \
+curl -s -X POST $BASE/runs/$RUN_ID/observations/phishing-email-basic-assessment \
   -H 'Content-Type: application/json' -d '{}'
 ```
 
@@ -507,7 +520,6 @@ El archivo queda en: `s3://egslatam-cai-dev/workspaces/{WORKSPACE}/input/uploads
 
 ```bash
 python3 -m cai_orchestrator run-cai-terminal \
-  --client-id "cliente-abc" \
   --model "bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0" \
   --prompt "Analiza el workspace 8011029C760FA_8011029DE7578. Encuentra el ZIP más reciente, créa el caso, estágealo, corre analytics y muéstrame los top talkers con tráfico denegado."
 ```
@@ -580,32 +592,52 @@ phishing-synthesis (nodo terminal)
 
 ## Despliegue en producción (AWS)
 
-El API corre en ECS Fargate detrás de un ALB. La base de datos es RDS PostgreSQL.
+La plataforma corre completamente en AWS: `platform-api` y `platform-ui` en ECS Fargate detrás de un ALB, base de datos en RDS PostgreSQL, imágenes en ECR, logs en CloudWatch, y credenciales en Secrets Manager.
 
-### Recursos AWS actuales
+**Guía completa:** [docs/operations/deploy-aws.md](docs/operations/deploy-aws.md)
+
+La guía cubre desde cero: prerequisitos, Terraform, build de imágenes, Secrets Manager, CI/CD y troubleshooting.
+
+### Instalación rápida (cuenta nueva)
+
+```bash
+# 1. Editar backend.tf con el bucket y región de la cuenta destino
+# 2. Editar environments/prod/terraform.tfvars con los valores del cliente
+
+# 3. Crear prerequisitos (bucket S3 y tabla DynamoDB de locks)
+aws s3 mb s3://<bucket> --region <region>
+make tf-locks-table
+
+# 4. Aplicar infraestructura (~10-15 min)
+make tf-init TF_ENV=prod
+make tf-apply TF_ENV=prod
+
+# 5. Construir y subir imágenes Docker a ECR
+# (ver la guía completa para los comandos exactos con los URIs del output)
+
+# 6. Verificar
+make health
+```
+
+### Instalación existente (cuenta EGS actual)
 
 | Recurso | Identificador |
 |---|---|
-| ALB | `cai-platform-alb` — `cai-platform-alb-472989822.us-east-2.elb.amazonaws.com` |
-| ECS Cluster | `cai-platform-cluster` |
-| ECS Service | `cai-platform-service` |
-| ECR Repository | `cai-platform-api` |
-| RDS (PostgreSQL) | `cai-platform-db.c9ow4kqay2rx.us-east-2.rds.amazonaws.com` |
-| DB Name | `caiplatform` |
-| Secrets Manager | `cai-platform/db-credentials` |
+| ALB | `terraform -chdir=infrastructure/terraform output -raw alb_dns` |
+| API | `http://$(terraform -chdir=infrastructure/terraform output -raw alb_dns)/health` |
+| UI | `http://$(terraform -chdir=infrastructure/terraform output -raw alb_dns)/ui` |
+| ECS Cluster | `cai-platform` (us-east-2) |
+| RDS | `terraform -chdir=infrastructure/terraform output -raw rds_endpoint` |
 | S3 Bucket | `egslatam-cai-dev` |
-| Región | `us-east-2` |
-
-### Flujo de deploy
 
 ```bash
-# 1. Build y push de la imagen al ECR
-make ecr-push
+# Apagar servicios (ahorro de costo)
+make ecs-stop
 
-# 2. Forzar nuevo deployment en ECS (usa la imagen más reciente)
-make ecs-deploy
+# Encender servicios
+make ecs-start
 
-# 3. Verificar que el servicio levantó
+# Verificar estado
 make health
 ```
 
@@ -660,10 +692,8 @@ make install-dev   # instala todos los paquetes en modo editable
 
 ```bash
 make test          # correr todos los tests (pytest)
-make test-fast     # tests sin marcadores lentos
-make lint          # ruff + mypy
-make build         # build imagen Docker
-make up            # levantar API local (http://localhost:8000)
+make build         # build imágenes Docker de API y UI
+make up            # levantar API local (http://localhost:8000) y UI (http://localhost:8501)
 make down          # bajar contenedores
 make health        # GET /health contra PLATFORM_API_BASE_URL
 make api-dev       # correr API directamente con uvicorn (sin Docker)
@@ -672,7 +702,7 @@ make api-dev       # correr API directamente con uvicorn (sin Docker)
 ### Correr un test específico
 
 ```bash
-pytest tests/test_platform_api.py::test_health -v
+pytest tests/apps/test_platform_api.py::test_health -v
 pytest tests/ -k "watchguard" -v
 ```
 
@@ -680,11 +710,12 @@ pytest tests/ -k "watchguard" -v
 
 ```
 tests/
-├── test_platform_api.py          # Tests de integración del API HTTP
-├── test_platform_core.py         # Tests de servicios core
-├── test_platform_backends.py     # Tests de backends
-├── test_cai_terminal_integration.py  # Tests de integración CAI
-└── ...
+├── contracts/                    # Contratos Pydantic y surface tests
+├── core/                         # Servicios y reglas del core
+├── adapters/                     # Normalización y traducción
+├── backends/                     # Backends deterministas
+├── apps/                         # API, orquestador y terminal CAI
+└── README.md
 ```
 
 Los tests usan runtime en memoria (`DATABASE_URL` no definido) y no requieren Docker ni PostgreSQL.
@@ -768,13 +799,21 @@ En `apps/cai-orchestrator/src/cai_orchestrator/cai_terminal.py`, agregar las `@f
 | `GET` | `/artifacts/{artifact_id}/content` | Leer contenido del artefacto |
 | `POST` | `/runs/{run_id}/observations/watchguard-normalize` | Observación WatchGuard normalize |
 | `POST` | `/runs/{run_id}/observations/watchguard-filter-denied` | Filtrar eventos denegados |
-| `POST` | `/runs/{run_id}/observations/watchguard-analytics` | Analytics bundle WatchGuard |
-| `POST` | `/runs/{run_id}/observations/watchguard-top-talkers` | Top talkers WatchGuard |
-| `POST` | `/runs/{run_id}/observations/watchguard-stage-workspace` | Stage ZIP S3 → CSVs |
-| `POST` | `/runs/{run_id}/observations/watchguard-duckdb-analytics` | DuckDB analytics sobre S3 |
-| `POST` | `/runs/{run_id}/observations/phishing-basic` | Evaluación básica phishing |
-| `POST` | `/runs/{run_id}/observations/phishing-header` | Análisis de cabeceras phishing |
-| `POST` | `/runs/{run_id}/queries` | Ejecutar query guarded (requiere approval) |
+| `POST` | `/runs/{run_id}/observations/watchguard-analytics-basic` | Analytics bundle WatchGuard |
+| `POST` | `/runs/{run_id}/observations/watchguard-top-talkers-basic` | Top talkers WatchGuard |
+| `POST` | `/runs/{run_id}/observations/watchguard-stage-workspace-zip` | Stage ZIP S3 → CSVs |
+| `POST` | `/runs/{run_id}/observations/watchguard-duckdb-workspace-analytics` | DuckDB analytics sobre S3 |
+| `POST` | `/runs/{run_id}/observations/watchguard-ddos-temporal-analysis` | Serie temporal DDoS |
+| `POST` | `/runs/{run_id}/observations/watchguard-ddos-top-destinations` | Destinos principales DDoS |
+| `POST` | `/runs/{run_id}/observations/watchguard-ddos-top-sources` | Fuentes principales DDoS |
+| `POST` | `/runs/{run_id}/observations/watchguard-ddos-segment-analysis` | Análisis DDoS por segmento |
+| `POST` | `/runs/{run_id}/observations/watchguard-ddos-ip-profile` | Perfil DDoS de una IP |
+| `POST` | `/runs/{run_id}/observations/watchguard-ddos-hourly-distribution` | Distribución horaria DDoS |
+| `POST` | `/runs/{run_id}/observations/watchguard-ddos-protocol-breakdown` | Distribución por protocolo DDoS |
+| `POST` | `/runs/{run_id}/observations/phishing-email-basic-assessment` | Evaluación básica phishing |
+| `POST` | `/runs/{run_id}/observations/phishing-email-header-analysis` | Análisis de cabeceras phishing |
+| `POST` | `/runs/{run_id}/queries/watchguard-guarded-filtered-rows` | Ejecutar query guarded en memoria |
+| `POST` | `/runs/{run_id}/queries/watchguard-duckdb-workspace-query` | Ejecutar query DuckDB guarded sobre staging S3 |
 | `POST` | `/approval-decisions` | Registrar decisión de aprobación |
 
 ---

@@ -108,7 +108,7 @@ cai-orchestrator
   └── Agent (egs-analist)
         ├── @function_tool create_case → POST /cases
         ├── @function_tool execute_watchguard_normalize → POST /runs/{id}/observations/...
-        └── handoff → phishing_investigator_agent
+        └── handoff → phishing_investigator
               ├── phishing-triage
               ├── phishing-specialists
               └── phishing-synthesis

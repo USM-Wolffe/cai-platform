@@ -21,6 +21,13 @@ from platform_backends.phishing_email import (
 )
 from platform_backends.watchguard_logs import (
     WATCHGUARD_ANALYTICS_BUNDLE_BASIC_OPERATION,
+    WATCHGUARD_DDOS_HOURLY_DISTRIBUTION_OPERATION,
+    WATCHGUARD_DDOS_IP_PROFILE_OPERATION,
+    WATCHGUARD_DDOS_PROTOCOL_BREAKDOWN_OPERATION,
+    WATCHGUARD_DDOS_SEGMENT_ANALYSIS_OPERATION,
+    WATCHGUARD_DDOS_TEMPORAL_ANALYSIS_OPERATION,
+    WATCHGUARD_DDOS_TOP_DESTINATIONS_OPERATION,
+    WATCHGUARD_DDOS_TOP_SOURCES_OPERATION,
     WATCHGUARD_DUCKDB_WORKSPACE_ANALYTICS_OPERATION,
     WATCHGUARD_FILTER_DENIED_EVENTS_OPERATION,
     WATCHGUARD_LOGS_BACKEND_ID,
@@ -192,6 +199,111 @@ def execute_watchguard_duckdb_workspace_analytics_endpoint(
     )
 
 
+@router.post("/{run_id}/observations/watchguard-ddos-temporal-analysis", response_model=None)
+def execute_watchguard_ddos_temporal_analysis_endpoint(
+    run_id: str,
+    request: ExecuteObservationRequest = Body(default_factory=ExecuteObservationRequest),
+    runtime: AppRuntime = Depends(get_runtime),
+) -> object:
+    return _run_observation(
+        run_id=run_id,
+        request_body=request,
+        runtime=runtime,
+        backend_id=WATCHGUARD_LOGS_BACKEND_ID,
+        operation_kind=WATCHGUARD_DDOS_TEMPORAL_ANALYSIS_OPERATION,
+    )
+
+
+@router.post("/{run_id}/observations/watchguard-ddos-top-destinations", response_model=None)
+def execute_watchguard_ddos_top_destinations_endpoint(
+    run_id: str,
+    request: ExecuteObservationRequest = Body(default_factory=ExecuteObservationRequest),
+    runtime: AppRuntime = Depends(get_runtime),
+) -> object:
+    return _run_observation(
+        run_id=run_id,
+        request_body=request,
+        runtime=runtime,
+        backend_id=WATCHGUARD_LOGS_BACKEND_ID,
+        operation_kind=WATCHGUARD_DDOS_TOP_DESTINATIONS_OPERATION,
+    )
+
+
+@router.post("/{run_id}/observations/watchguard-ddos-top-sources", response_model=None)
+def execute_watchguard_ddos_top_sources_endpoint(
+    run_id: str,
+    request: ExecuteObservationRequest = Body(default_factory=ExecuteObservationRequest),
+    runtime: AppRuntime = Depends(get_runtime),
+) -> object:
+    return _run_observation(
+        run_id=run_id,
+        request_body=request,
+        runtime=runtime,
+        backend_id=WATCHGUARD_LOGS_BACKEND_ID,
+        operation_kind=WATCHGUARD_DDOS_TOP_SOURCES_OPERATION,
+    )
+
+
+@router.post("/{run_id}/observations/watchguard-ddos-segment-analysis", response_model=None)
+def execute_watchguard_ddos_segment_analysis_endpoint(
+    run_id: str,
+    request: ExecuteObservationRequest = Body(default_factory=ExecuteObservationRequest),
+    runtime: AppRuntime = Depends(get_runtime),
+) -> object:
+    return _run_observation(
+        run_id=run_id,
+        request_body=request,
+        runtime=runtime,
+        backend_id=WATCHGUARD_LOGS_BACKEND_ID,
+        operation_kind=WATCHGUARD_DDOS_SEGMENT_ANALYSIS_OPERATION,
+    )
+
+
+@router.post("/{run_id}/observations/watchguard-ddos-ip-profile", response_model=None)
+def execute_watchguard_ddos_ip_profile_endpoint(
+    run_id: str,
+    request: ExecuteObservationRequest = Body(default_factory=ExecuteObservationRequest),
+    runtime: AppRuntime = Depends(get_runtime),
+) -> object:
+    return _run_observation(
+        run_id=run_id,
+        request_body=request,
+        runtime=runtime,
+        backend_id=WATCHGUARD_LOGS_BACKEND_ID,
+        operation_kind=WATCHGUARD_DDOS_IP_PROFILE_OPERATION,
+    )
+
+
+@router.post("/{run_id}/observations/watchguard-ddos-hourly-distribution", response_model=None)
+def execute_watchguard_ddos_hourly_distribution_endpoint(
+    run_id: str,
+    request: ExecuteObservationRequest = Body(default_factory=ExecuteObservationRequest),
+    runtime: AppRuntime = Depends(get_runtime),
+) -> object:
+    return _run_observation(
+        run_id=run_id,
+        request_body=request,
+        runtime=runtime,
+        backend_id=WATCHGUARD_LOGS_BACKEND_ID,
+        operation_kind=WATCHGUARD_DDOS_HOURLY_DISTRIBUTION_OPERATION,
+    )
+
+
+@router.post("/{run_id}/observations/watchguard-ddos-protocol-breakdown", response_model=None)
+def execute_watchguard_ddos_protocol_breakdown_endpoint(
+    run_id: str,
+    request: ExecuteObservationRequest = Body(default_factory=ExecuteObservationRequest),
+    runtime: AppRuntime = Depends(get_runtime),
+) -> object:
+    return _run_observation(
+        run_id=run_id,
+        request_body=request,
+        runtime=runtime,
+        backend_id=WATCHGUARD_LOGS_BACKEND_ID,
+        operation_kind=WATCHGUARD_DDOS_PROTOCOL_BREAKDOWN_OPERATION,
+    )
+
+
 @router.post("/{run_id}/observations/phishing-email-header-analysis", response_model=None)
 def execute_phishing_email_header_analysis_endpoint(
     run_id: str,
@@ -241,6 +353,7 @@ def _run_observation(
         run_ref=EntityRef(entity_type=EntityKind.RUN, id=run.run_id),
         operation_kind=operation_kind,
         input_artifact_refs=[EntityRef(entity_type=EntityKind.ARTIFACT, id=input_artifact.artifact_id)],
+        parameters=request_body.parameters,
         requested_by=request_body.requested_by,
     )
     runtime.record_observation_request(observation_request)

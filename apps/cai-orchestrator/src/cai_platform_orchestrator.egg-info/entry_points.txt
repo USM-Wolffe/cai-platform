@@ -1,2 +1,0 @@
-[console_scripts]
-cai-orchestrator = cai_orchestrator.app:main

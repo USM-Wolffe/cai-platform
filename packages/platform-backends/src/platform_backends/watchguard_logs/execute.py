@@ -41,6 +41,13 @@ from platform_core import ContractViolationError
 
 from platform_backends.watchguard_logs.descriptor import (
     WATCHGUARD_ANALYTICS_BUNDLE_BASIC_OPERATION,
+    WATCHGUARD_DDOS_HOURLY_DISTRIBUTION_OPERATION,
+    WATCHGUARD_DDOS_IP_PROFILE_OPERATION,
+    WATCHGUARD_DDOS_PROTOCOL_BREAKDOWN_OPERATION,
+    WATCHGUARD_DDOS_SEGMENT_ANALYSIS_OPERATION,
+    WATCHGUARD_DDOS_TEMPORAL_ANALYSIS_OPERATION,
+    WATCHGUARD_DDOS_TOP_DESTINATIONS_OPERATION,
+    WATCHGUARD_DDOS_TOP_SOURCES_OPERATION,
     WATCHGUARD_DUCKDB_WORKSPACE_ANALYTICS_OPERATION,
     WATCHGUARD_DUCKDB_WORKSPACE_QUERY_CLASS,
     WATCHGUARD_FILTER_DENIED_EVENTS_OPERATION,
@@ -84,9 +91,21 @@ def execute_predefined_observation(
     observation_request: ObservationRequest,
 ) -> WatchGuardExecutionOutcome:
     """Execute a predefined WatchGuard observation and normalize the outcome."""
+    _STAGING_MANIFEST_OPERATIONS = {
+        WATCHGUARD_STAGE_WORKSPACE_ZIP_OPERATION,
+        WATCHGUARD_DUCKDB_WORKSPACE_ANALYTICS_OPERATION,
+        WATCHGUARD_DDOS_TEMPORAL_ANALYSIS_OPERATION,
+        WATCHGUARD_DDOS_TOP_DESTINATIONS_OPERATION,
+        WATCHGUARD_DDOS_TOP_SOURCES_OPERATION,
+        WATCHGUARD_DDOS_SEGMENT_ANALYSIS_OPERATION,
+        WATCHGUARD_DDOS_IP_PROFILE_OPERATION,
+        WATCHGUARD_DDOS_HOURLY_DISTRIBUTION_OPERATION,
+        WATCHGUARD_DDOS_PROTOCOL_BREAKDOWN_OPERATION,
+    }
     try:
         _validate_observation_request(run=run, observation_request=observation_request)
-        inspect_watchguard_input_artifact(input_artifact)
+        if observation_request.operation_kind not in _STAGING_MANIFEST_OPERATIONS:
+            inspect_watchguard_input_artifact(input_artifact)
         if observation_request.operation_kind == WATCHGUARD_WORKSPACE_ZIP_INGESTION_OPERATION:
             return _execute_workspace_zip_ingestion(
                 run=run,
@@ -103,6 +122,55 @@ def execute_predefined_observation(
             )
         if observation_request.operation_kind == WATCHGUARD_DUCKDB_WORKSPACE_ANALYTICS_OPERATION:
             return _execute_duckdb_workspace_analytics(
+                run=run,
+                input_artifact=input_artifact,
+                input_payload=input_payload,
+                observation_request=observation_request,
+            )
+        if observation_request.operation_kind == WATCHGUARD_DDOS_TEMPORAL_ANALYSIS_OPERATION:
+            return _execute_ddos_temporal_analysis(
+                run=run,
+                input_artifact=input_artifact,
+                input_payload=input_payload,
+                observation_request=observation_request,
+            )
+        if observation_request.operation_kind == WATCHGUARD_DDOS_TOP_DESTINATIONS_OPERATION:
+            return _execute_ddos_top_destinations(
+                run=run,
+                input_artifact=input_artifact,
+                input_payload=input_payload,
+                observation_request=observation_request,
+            )
+        if observation_request.operation_kind == WATCHGUARD_DDOS_TOP_SOURCES_OPERATION:
+            return _execute_ddos_top_sources(
+                run=run,
+                input_artifact=input_artifact,
+                input_payload=input_payload,
+                observation_request=observation_request,
+            )
+        if observation_request.operation_kind == WATCHGUARD_DDOS_SEGMENT_ANALYSIS_OPERATION:
+            return _execute_ddos_segment_analysis(
+                run=run,
+                input_artifact=input_artifact,
+                input_payload=input_payload,
+                observation_request=observation_request,
+            )
+        if observation_request.operation_kind == WATCHGUARD_DDOS_IP_PROFILE_OPERATION:
+            return _execute_ddos_ip_profile(
+                run=run,
+                input_artifact=input_artifact,
+                input_payload=input_payload,
+                observation_request=observation_request,
+            )
+        if observation_request.operation_kind == WATCHGUARD_DDOS_HOURLY_DISTRIBUTION_OPERATION:
+            return _execute_ddos_hourly_distribution(
+                run=run,
+                input_artifact=input_artifact,
+                input_payload=input_payload,
+                observation_request=observation_request,
+            )
+        if observation_request.operation_kind == WATCHGUARD_DDOS_PROTOCOL_BREAKDOWN_OPERATION:
+            return _execute_ddos_protocol_breakdown(
                 run=run,
                 input_artifact=input_artifact,
                 input_payload=input_payload,
@@ -400,13 +468,13 @@ def _execute_duckdb_workspace_analytics(
         families=staging.get("families", list(WATCHGUARD_INGESTION_FAMILIES)),
     )
 
-    analytics_payload: dict[str, Any] = {
+    analytics_payload: dict[str, Any] = _jsonify({
         "source": "duckdb_workspace_analytics",
         "workspace": staging["workspace"],
         "staging_prefix": staging["staging_prefix"],
         "upload_id": staging.get("upload_id", ""),
         **analytics,
-    }
+    })
     artifact = Artifact(
         kind=ArtifactKind.ANALYSIS_OUTPUT,
         subtype="watchguard.duckdb_workspace_analytics",
@@ -449,6 +517,292 @@ def _execute_duckdb_workspace_analytics(
         },
     )
     return WatchGuardExecutionOutcome(artifacts=[artifact], observation_result=observation_result)
+
+
+def _ddos_make_artifact(
+    *,
+    run: Run,
+    observation_request: ObservationRequest,
+    payload: dict[str, Any],
+    subtype: str,
+    summary: str,
+) -> Artifact:
+    serialized = json.dumps(payload, sort_keys=True)
+    content_hash = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    return Artifact(
+        kind=ArtifactKind.ANALYSIS_OUTPUT,
+        subtype=subtype,
+        format="json",
+        storage_ref=(
+            f"backend://watchguard_logs/runs/{run.run_id}/"
+            f"observations/{observation_request.observation_id}/{subtype.replace('.', '_')}.json"
+        ),
+        content_hash=f"sha256:{content_hash}",
+        produced_by_backend_ref=EntityRef(entity_type=EntityKind.BACKEND, id=WATCHGUARD_LOGS_BACKEND_ID),
+        produced_by_run_ref=EntityRef(entity_type=EntityKind.RUN, id=run.run_id),
+        produced_by_observation_ref=EntityRef(
+            entity_type=EntityKind.OBSERVATION_REQUEST,
+            id=observation_request.observation_id,
+        ),
+        summary=summary,
+        metadata=payload,
+    )
+
+
+def _ddos_make_outcome(
+    *,
+    run: Run,
+    observation_request: ObservationRequest,
+    payload: dict[str, Any],
+    subtype: str,
+    summary: str,
+    structured_summary: dict[str, Any],
+) -> "WatchGuardExecutionOutcome":
+    artifact = _ddos_make_artifact(
+        run=run,
+        observation_request=observation_request,
+        payload=payload,
+        subtype=subtype,
+        summary=summary,
+    )
+    observation_result = ObservationResult(
+        observation_ref=EntityRef(
+            entity_type=EntityKind.OBSERVATION_REQUEST,
+            id=observation_request.observation_id,
+        ),
+        status=ObservationStatus.SUCCEEDED,
+        output_artifact_refs=[EntityRef(entity_type=EntityKind.ARTIFACT, id=artifact.artifact_id)],
+        structured_summary=structured_summary,
+        provenance={
+            "backend_id": WATCHGUARD_LOGS_BACKEND_ID,
+            "operation_kind": observation_request.operation_kind,
+        },
+    )
+    return WatchGuardExecutionOutcome(artifacts=[artifact], observation_result=observation_result)
+
+
+def _execute_ddos_temporal_analysis(
+    *,
+    run: Run,
+    input_artifact: Artifact,
+    input_payload: object,
+    observation_request: ObservationRequest,
+) -> "WatchGuardExecutionOutcome":
+    staging = _parse_staging_manifest(input_payload)
+    result = _run_duckdb_ddos_temporal_analysis(
+        bucket=staging["bucket"],
+        staging_prefix=staging["staging_prefix"],
+    )
+    payload = {
+        "source": "ddos_temporal_analysis",
+        "workspace": staging["workspace"],
+        "staging_prefix": staging["staging_prefix"],
+        **result,
+    }
+    return _ddos_make_outcome(
+        run=run,
+        observation_request=observation_request,
+        payload=payload,
+        subtype="watchguard.ddos_temporal_analysis",
+        summary=f"DDoS temporal analysis: {result.get('total_events', 0)} events over {len(result.get('by_day', []))} days. Peak day: {result.get('peak_day')}.",
+        structured_summary={
+            "total_events": result.get("total_events", 0),
+            "peak_day": result.get("peak_day"),
+            "peak_events": result.get("peak_events", 0),
+            "date_range": result.get("date_range"),
+        },
+    )
+
+
+def _execute_ddos_top_destinations(
+    *,
+    run: Run,
+    input_artifact: Artifact,
+    input_payload: object,
+    observation_request: ObservationRequest,
+) -> "WatchGuardExecutionOutcome":
+    staging = _parse_staging_manifest(input_payload)
+    result = _run_duckdb_ddos_top_destinations(
+        bucket=staging["bucket"],
+        staging_prefix=staging["staging_prefix"],
+    )
+    payload = {
+        "source": "ddos_top_destinations",
+        "workspace": staging["workspace"],
+        "staging_prefix": staging["staging_prefix"],
+        **result,
+    }
+    top = result.get("destinations", [{}])[0] if result.get("destinations") else {}
+    return _ddos_make_outcome(
+        run=run,
+        observation_request=observation_request,
+        payload=payload,
+        subtype="watchguard.ddos_top_destinations",
+        summary=f"Top destinations: {len(result.get('destinations', []))} IPs. #1: {top.get('dst_ip')} ({top.get('pct', 0):.1f}% of traffic).",
+        structured_summary={
+            "total_events": result.get("total_events", 0),
+            "top_destination": top.get("dst_ip"),
+            "top_destination_pct": top.get("pct"),
+            "destination_count": len(result.get("destinations", [])),
+        },
+    )
+
+
+def _execute_ddos_top_sources(
+    *,
+    run: Run,
+    input_artifact: Artifact,
+    input_payload: object,
+    observation_request: ObservationRequest,
+) -> "WatchGuardExecutionOutcome":
+    staging = _parse_staging_manifest(input_payload)
+    result = _run_duckdb_ddos_top_sources(
+        bucket=staging["bucket"],
+        staging_prefix=staging["staging_prefix"],
+    )
+    payload = {
+        "source": "ddos_top_sources",
+        "workspace": staging["workspace"],
+        "staging_prefix": staging["staging_prefix"],
+        **result,
+    }
+    top = result.get("sources", [{}])[0] if result.get("sources") else {}
+    top_seg = result.get("segments", [{}])[0] if result.get("segments") else {}
+    return _ddos_make_outcome(
+        run=run,
+        observation_request=observation_request,
+        payload=payload,
+        subtype="watchguard.ddos_top_sources",
+        summary=f"Top sources: {len(result.get('sources', []))} IPs in {len(result.get('segments', []))} /16 segments. Dominant segment: {top_seg.get('segment')} ({top_seg.get('pct', 0):.1f}%).",
+        structured_summary={
+            "total_events": result.get("total_events", 0),
+            "top_source": top.get("src_ip"),
+            "top_source_pct": top.get("pct"),
+            "dominant_segment": top_seg.get("segment"),
+            "dominant_segment_pct": top_seg.get("pct"),
+            "segment_count": len(result.get("segments", [])),
+        },
+    )
+
+
+def _execute_ddos_segment_analysis(
+    *,
+    run: Run,
+    input_artifact: Artifact,
+    input_payload: object,
+    observation_request: ObservationRequest,
+) -> "WatchGuardExecutionOutcome":
+    staging = _parse_staging_manifest(input_payload)
+    segment = observation_request.parameters.get("segment", "")
+    if not segment:
+        raise UnsupportedWatchGuardObservationError(
+            "ddos_segment_analysis requires 'segment' in observation parameters (e.g. '159.60.0.0/16')"
+        )
+    result = _run_duckdb_ddos_segment_analysis(
+        bucket=staging["bucket"],
+        staging_prefix=staging["staging_prefix"],
+        segment=segment,
+    )
+    payload = {
+        "source": "ddos_segment_analysis",
+        "workspace": staging["workspace"],
+        "staging_prefix": staging["staging_prefix"],
+        **result,
+    }
+    return _ddos_make_outcome(
+        run=run,
+        observation_request=observation_request,
+        payload=payload,
+        subtype="watchguard.ddos_segment_analysis",
+        summary=f"Segment {segment}: {result.get('total_events', 0)} events ({result.get('allow_events', 0)} allow / {result.get('deny_events', 0)} deny).",
+        structured_summary={
+            "segment": segment,
+            "total_events": result.get("total_events", 0),
+            "allow_events": result.get("allow_events", 0),
+            "deny_events": result.get("deny_events", 0),
+        },
+    )
+
+
+def _execute_ddos_ip_profile(
+    *,
+    run: Run,
+    input_artifact: Artifact,
+    input_payload: object,
+    observation_request: ObservationRequest,
+) -> "WatchGuardExecutionOutcome":
+    staging = _parse_staging_manifest(input_payload)
+    ip = observation_request.parameters.get("ip", "")
+    if not ip:
+        raise UnsupportedWatchGuardObservationError(
+            "ddos_ip_profile requires 'ip' in observation parameters (e.g. '223.123.92.149')"
+        )
+    result = _run_duckdb_ddos_ip_profile(
+        bucket=staging["bucket"],
+        staging_prefix=staging["staging_prefix"],
+        ip=ip,
+    )
+    payload = {
+        "source": "ddos_ip_profile",
+        "workspace": staging["workspace"],
+        "staging_prefix": staging["staging_prefix"],
+        **result,
+    }
+    return _ddos_make_outcome(
+        run=run,
+        observation_request=observation_request,
+        payload=payload,
+        subtype="watchguard.ddos_ip_profile",
+        summary=f"IP {ip}: {result.get('total_events', 0)} events ({result.get('allow_events', 0)} allow / {result.get('deny_events', 0)} deny). Active {result.get('first_seen')} to {result.get('last_seen')}.",
+        structured_summary={
+            "ip": ip,
+            "total_events": result.get("total_events", 0),
+            "allow_events": result.get("allow_events", 0),
+            "deny_events": result.get("deny_events", 0),
+            "first_seen": result.get("first_seen"),
+            "last_seen": result.get("last_seen"),
+        },
+    )
+
+
+def _execute_ddos_hourly_distribution(
+    *,
+    run: Run,
+    input_artifact: Artifact,
+    input_payload: object,
+    observation_request: ObservationRequest,
+) -> "WatchGuardExecutionOutcome":
+    staging = _parse_staging_manifest(input_payload)
+    date = observation_request.parameters.get("date", "")
+    if not date:
+        raise UnsupportedWatchGuardObservationError(
+            "ddos_hourly_distribution requires 'date' in observation parameters (e.g. '2025-10-16')"
+        )
+    result = _run_duckdb_ddos_hourly_distribution(
+        bucket=staging["bucket"],
+        staging_prefix=staging["staging_prefix"],
+        date=date,
+    )
+    payload = {
+        "source": "ddos_hourly_distribution",
+        "workspace": staging["workspace"],
+        "staging_prefix": staging["staging_prefix"],
+        **result,
+    }
+    return _ddos_make_outcome(
+        run=run,
+        observation_request=observation_request,
+        payload=payload,
+        subtype="watchguard.ddos_hourly_distribution",
+        summary=f"Hourly distribution for {date}: peak at hour {result.get('peak_hour')} with {result.get('peak_events', 0)} events. Pattern: {result.get('pattern')}.",
+        structured_summary={
+            "date": date,
+            "peak_hour": result.get("peak_hour"),
+            "peak_events": result.get("peak_events", 0),
+            "pattern": result.get("pattern"),
+            "total_events": result.get("total_events", 0),
+        },
+    )
 
 
 def _execute_workspace_zip_ingestion(
@@ -521,6 +875,13 @@ def _validate_observation_request(*, run: Run, observation_request: ObservationR
         WATCHGUARD_TOP_TALKERS_BASIC_OPERATION,
         WATCHGUARD_STAGE_WORKSPACE_ZIP_OPERATION,
         WATCHGUARD_DUCKDB_WORKSPACE_ANALYTICS_OPERATION,
+        WATCHGUARD_DDOS_TEMPORAL_ANALYSIS_OPERATION,
+        WATCHGUARD_DDOS_TOP_DESTINATIONS_OPERATION,
+        WATCHGUARD_DDOS_TOP_SOURCES_OPERATION,
+        WATCHGUARD_DDOS_SEGMENT_ANALYSIS_OPERATION,
+        WATCHGUARD_DDOS_IP_PROFILE_OPERATION,
+        WATCHGUARD_DDOS_HOURLY_DISTRIBUTION_OPERATION,
+        WATCHGUARD_DDOS_PROTOCOL_BREAKDOWN_OPERATION,
     }:
         raise UnsupportedWatchGuardObservationError(
             f"unsupported operation_kind '{observation_request.operation_kind}'"
@@ -1341,10 +1702,399 @@ def _build_workspace_family_artifact(
     )
 
 
+def _jsonify(obj: Any) -> Any:
+    """Recursively convert non-JSON-serializable types (datetime, date) to ISO strings."""
+    import datetime as _dt
+
+    if isinstance(obj, (_dt.datetime, _dt.date)):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {k: _jsonify(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_jsonify(v) for v in obj]
+    return obj
+
+
 def _content_hash_for_payload(payload: dict[str, Any]) -> str:
-    serialized_payload = json.dumps(payload, sort_keys=True)
+    serialized_payload = json.dumps(_jsonify(payload), sort_keys=True)
     digest = hashlib.sha256(serialized_payload.encode("utf-8")).hexdigest()
     return f"sha256:{digest}"
+
+
+# ── DDoS DuckDB analytics ────────────────────────────────────────────────────
+
+
+def _run_duckdb_ddos_temporal_analysis(*, bucket: str, staging_prefix: str) -> dict[str, Any]:
+    """Events per day with % variation. Identifies peak day and cyclical patterns."""
+    con = _duckdb_connect_with_s3(bucket)
+    files = _list_staging_csvs(bucket=bucket, staging_prefix=staging_prefix, family=WATCHGUARD_TRAFFIC_LOG_TYPE)
+    if not files:
+        con.close()
+        return {"by_day": [], "peak_day": None, "peak_events": 0, "total_events": 0, "date_range": {"from": None, "to": None}, "pattern": "no_data"}
+
+    names_sql = ", ".join(f"'{c}'" for c in _TRAFFIC_COLUMNS)
+    con.execute(
+        f"CREATE OR REPLACE VIEW traffic_logs AS "
+        f"SELECT * FROM read_csv({files!r}, names=[{names_sql}], header=false, null_padding=true, ignore_errors=true)"
+    )
+    rows = con.execute(
+        "SELECT strftime(timestamp::DATE, '%Y-%m-%d') as day, COUNT(*) as cnt "
+        "FROM traffic_logs WHERE timestamp IS NOT NULL "
+        "GROUP BY day ORDER BY day"
+    ).fetchall()
+    con.close()
+
+    if not rows:
+        return {"by_day": [], "peak_day": None, "peak_events": 0, "total_events": 0, "date_range": {"from": None, "to": None}, "pattern": "no_data"}
+
+    by_day = []
+    prev_cnt = None
+    for day, cnt in rows:
+        variation = round((cnt - prev_cnt) / prev_cnt * 100, 2) if prev_cnt else None
+        by_day.append({"date": day, "events": cnt, "variation_pct": variation})
+        prev_cnt = cnt
+
+    peak = max(by_day, key=lambda x: x["events"])
+    total = sum(r["events"] for r in by_day)
+    return {
+        "by_day": by_day,
+        "peak_day": peak["date"],
+        "peak_events": peak["events"],
+        "total_events": total,
+        "date_range": {"from": by_day[0]["date"], "to": by_day[-1]["date"]},
+        "pattern": "cyclic" if len(by_day) >= 7 else "short_period",
+    }
+
+
+def _run_duckdb_ddos_top_destinations(*, bucket: str, staging_prefix: str, top_n: int = 10) -> dict[str, Any]:
+    """Top N destination IPs with event count, percentage, and top policy."""
+    con = _duckdb_connect_with_s3(bucket)
+    files = _list_staging_csvs(bucket=bucket, staging_prefix=staging_prefix, family=WATCHGUARD_TRAFFIC_LOG_TYPE)
+    if not files:
+        con.close()
+        return {"destinations": [], "total_events": 0}
+
+    names_sql = ", ".join(f"'{c}'" for c in _TRAFFIC_COLUMNS)
+    con.execute(
+        f"CREATE OR REPLACE VIEW traffic_logs AS "
+        f"SELECT * FROM read_csv({files!r}, names=[{names_sql}], header=false, null_padding=true, ignore_errors=true)"
+    )
+    # Materialize into in-memory table so all subsequent queries avoid repeated S3 reads
+    con.execute(
+        "CREATE OR REPLACE TABLE tl AS "
+        "SELECT dst_ip, action, policy FROM traffic_logs WHERE dst_ip IS NOT NULL"
+    )
+    total = con.execute("SELECT COUNT(*) FROM tl").fetchone()[0]
+    rows = con.execute(
+        f"SELECT dst_ip, COUNT(*) as cnt, mode(policy) as top_policy, mode(action) as top_action "
+        f"FROM tl GROUP BY dst_ip ORDER BY cnt DESC LIMIT {top_n}"
+    ).fetchall()
+    con.close()
+
+    destinations = [
+        {
+            "rank": i + 1,
+            "dst_ip": r[0],
+            "events": r[1],
+            "pct": round(r[1] / total * 100, 2) if total else 0,
+            "top_policy": r[2],
+            "top_action": r[3],
+        }
+        for i, r in enumerate(rows)
+    ]
+    return {"destinations": destinations, "total_events": total}
+
+
+def _run_duckdb_ddos_top_sources(*, bucket: str, staging_prefix: str, top_n: int = 10) -> dict[str, Any]:
+    """Top N source IPs with /16 segment grouping and event counts."""
+    con = _duckdb_connect_with_s3(bucket)
+    files = _list_staging_csvs(bucket=bucket, staging_prefix=staging_prefix, family=WATCHGUARD_TRAFFIC_LOG_TYPE)
+    if not files:
+        con.close()
+        return {"sources": [], "segments": [], "total_events": 0}
+
+    names_sql = ", ".join(f"'{c}'" for c in _TRAFFIC_COLUMNS)
+    con.execute(
+        f"CREATE OR REPLACE VIEW traffic_logs AS "
+        f"SELECT * FROM read_csv({files!r}, names=[{names_sql}], header=false, null_padding=true, ignore_errors=true)"
+    )
+    # Materialize into in-memory table so all subsequent queries avoid repeated S3 reads
+    con.execute(
+        "CREATE OR REPLACE TABLE tl AS "
+        "SELECT src_ip, action FROM traffic_logs WHERE src_ip IS NOT NULL"
+    )
+    total = con.execute("SELECT COUNT(*) FROM tl").fetchone()[0]
+
+    # Top individual IPs — single pass with mode()
+    ip_rows = con.execute(
+        f"SELECT src_ip, COUNT(*) as cnt, mode(action) as top_action "
+        f"FROM tl GROUP BY src_ip ORDER BY cnt DESC LIMIT {top_n}"
+    ).fetchall()
+
+    # Aggregate by /16 segment using string_split
+    seg_rows = con.execute(
+        "SELECT "
+        "  concat(string_split(src_ip, '.')[1], '.', string_split(src_ip, '.')[2], '.0.0/16') as segment, "
+        "  COUNT(*) as cnt, COUNT(DISTINCT src_ip) as ip_count "
+        "FROM tl WHERE src_ip LIKE '%.%.%.%' "
+        "GROUP BY segment ORDER BY cnt DESC LIMIT 10"
+    ).fetchall()
+    con.close()
+
+    def _segment(ip: str) -> str:
+        parts = ip.split(".")
+        return f"{parts[0]}.{parts[1]}.0.0/16" if len(parts) == 4 else ip
+
+    sources = [
+        {
+            "rank": i + 1,
+            "src_ip": r[0],
+            "segment_16": _segment(r[0]) if r[0] else None,
+            "events": r[1],
+            "pct": round(r[1] / total * 100, 2) if total else 0,
+            "top_action": r[2],
+        }
+        for i, r in enumerate(ip_rows)
+    ]
+    segments = [
+        {
+            "segment": r[0],
+            "events": r[1],
+            "pct": round(r[1] / total * 100, 2) if total else 0,
+            "ip_count": r[2],
+        }
+        for r in seg_rows
+    ]
+    return {"sources": sources, "segments": segments, "total_events": total}
+
+
+def _run_duckdb_ddos_segment_analysis(*, bucket: str, staging_prefix: str, segment: str) -> dict[str, Any]:
+    """Detailed analysis for a /16 segment: protocols, ports, policies, allow/deny breakdown."""
+    con = _duckdb_connect_with_s3(bucket)
+    files = _list_staging_csvs(bucket=bucket, staging_prefix=staging_prefix, family=WATCHGUARD_TRAFFIC_LOG_TYPE)
+    if not files:
+        con.close()
+        return {"segment": segment, "total_events": 0, "allow_events": 0, "deny_events": 0, "top_dst_ports": [], "top_policies": [], "top_dst_ips": []}
+
+    names_sql = ", ".join(f"'{c}'" for c in _TRAFFIC_COLUMNS)
+    con.execute(
+        f"CREATE OR REPLACE VIEW traffic_logs AS "
+        f"SELECT * FROM read_csv({files!r}, names=[{names_sql}], header=false, null_padding=true, ignore_errors=true)"
+    )
+
+    # Build the /16 prefix filter from segment notation (e.g. "159.60.0.0/16" → prefix "159.60.")
+    prefix = ".".join(segment.split(".")[:2]) + "."
+    # Materialize filtered rows into in-memory table — one S3 read, fast subsequent queries
+    con.execute(
+        f"CREATE OR REPLACE TABLE seg_data AS "
+        f"SELECT src_ip, action, dst_ip, dst_port, protocol, policy, timestamp "
+        f"FROM traffic_logs WHERE src_ip LIKE '{prefix}%'"
+    )
+
+    total = con.execute("SELECT COUNT(*) FROM seg_data").fetchone()[0]
+    allow = con.execute(
+        "SELECT COUNT(*) FROM seg_data WHERE lower(action) IN ('allow', 'allowed', 'permit', 'permitted')"
+    ).fetchone()[0]
+    deny = con.execute(
+        "SELECT COUNT(*) FROM seg_data WHERE lower(action) IN ('deny', 'denied', 'block', 'blocked')"
+    ).fetchone()[0]
+
+    port_rows = con.execute(
+        "SELECT dst_port, protocol, COUNT(*) as cnt FROM seg_data "
+        "WHERE dst_port IS NOT NULL GROUP BY dst_port, protocol ORDER BY cnt DESC LIMIT 10"
+    ).fetchall()
+    policy_rows = con.execute(
+        "SELECT policy, COUNT(*) as cnt FROM seg_data "
+        "WHERE policy IS NOT NULL GROUP BY policy ORDER BY cnt DESC LIMIT 10"
+    ).fetchall()
+    dst_rows = con.execute(
+        "SELECT dst_ip, COUNT(*) as cnt FROM seg_data "
+        "WHERE dst_ip IS NOT NULL GROUP BY dst_ip ORDER BY cnt DESC LIMIT 10"
+    ).fetchall()
+
+    time_range = con.execute(
+        "SELECT MIN(timestamp), MAX(timestamp) FROM seg_data WHERE timestamp IS NOT NULL"
+    ).fetchone()
+    con.close()
+
+    return {
+        "segment": segment,
+        "total_events": total,
+        "allow_events": allow,
+        "deny_events": deny,
+        "top_dst_ports": [{"port": r[0], "protocol": r[1], "events": r[2]} for r in port_rows],
+        "top_policies": [{"policy": r[0], "events": r[1]} for r in policy_rows],
+        "top_dst_ips": [{"dst_ip": r[0], "events": r[1]} for r in dst_rows],
+        "date_range": {
+            "from": time_range[0].isoformat() if time_range[0] else None,
+            "to": time_range[1].isoformat() if time_range[1] else None,
+        },
+    }
+
+
+def _run_duckdb_ddos_ip_profile(*, bucket: str, staging_prefix: str, ip: str) -> dict[str, Any]:
+    """Full profile for a single IP: timeline, ports, policies, allow/deny breakdown."""
+    con = _duckdb_connect_with_s3(bucket)
+    files = _list_staging_csvs(bucket=bucket, staging_prefix=staging_prefix, family=WATCHGUARD_TRAFFIC_LOG_TYPE)
+    if not files:
+        con.close()
+        return {"ip": ip, "total_events": 0, "allow_events": 0, "deny_events": 0, "top_dst_ports": [], "top_policies": [], "top_dst_ips": [], "first_seen": None, "last_seen": None}
+
+    names_sql = ", ".join(f"'{c}'" for c in _TRAFFIC_COLUMNS)
+    con.execute(
+        f"CREATE OR REPLACE VIEW traffic_logs AS "
+        f"SELECT * FROM read_csv({files!r}, names=[{names_sql}], header=false, null_padding=true, ignore_errors=true)"
+    )
+    # Materialize filtered rows into in-memory table — one S3 read, fast subsequent queries
+    con.execute(
+        f"CREATE OR REPLACE TABLE ip_data AS "
+        f"SELECT src_ip, action, dst_ip, dst_port, protocol, policy, timestamp "
+        f"FROM traffic_logs WHERE src_ip = '{ip}'"
+    )
+
+    total = con.execute("SELECT COUNT(*) FROM ip_data").fetchone()[0]
+    allow = con.execute(
+        "SELECT COUNT(*) FROM ip_data WHERE lower(action) IN ('allow', 'allowed', 'permit', 'permitted')"
+    ).fetchone()[0]
+    deny = con.execute(
+        "SELECT COUNT(*) FROM ip_data WHERE lower(action) IN ('deny', 'denied', 'block', 'blocked')"
+    ).fetchone()[0]
+
+    port_rows = con.execute(
+        "SELECT dst_port, protocol, action, COUNT(*) as cnt FROM ip_data "
+        "WHERE dst_port IS NOT NULL GROUP BY dst_port, protocol, action ORDER BY cnt DESC LIMIT 10"
+    ).fetchall()
+    policy_rows = con.execute(
+        "SELECT policy, COUNT(*) as cnt FROM ip_data "
+        "WHERE policy IS NOT NULL GROUP BY policy ORDER BY cnt DESC LIMIT 10"
+    ).fetchall()
+    dst_rows = con.execute(
+        "SELECT dst_ip, COUNT(*) as cnt FROM ip_data "
+        "WHERE dst_ip IS NOT NULL GROUP BY dst_ip ORDER BY cnt DESC LIMIT 10"
+    ).fetchall()
+    time_range = con.execute(
+        "SELECT MIN(timestamp), MAX(timestamp) FROM ip_data WHERE timestamp IS NOT NULL"
+    ).fetchone()
+    con.close()
+
+    return {
+        "ip": ip,
+        "total_events": total,
+        "allow_events": allow,
+        "deny_events": deny,
+        "first_seen": time_range[0].isoformat() if time_range and time_range[0] else None,
+        "last_seen": time_range[1].isoformat() if time_range and time_range[1] else None,
+        "top_dst_ports": [{"port": r[0], "protocol": r[1], "action": r[2], "events": r[3]} for r in port_rows],
+        "top_policies": [{"policy": r[0], "events": r[1]} for r in policy_rows],
+        "top_dst_ips": [{"dst_ip": r[0], "events": r[1]} for r in dst_rows],
+    }
+
+
+def _run_duckdb_ddos_hourly_distribution(*, bucket: str, staging_prefix: str, date: str) -> dict[str, Any]:
+    """Events per hour for a given date. Identifies peak hour and business-hours pattern."""
+    con = _duckdb_connect_with_s3(bucket)
+    files = _list_staging_csvs(bucket=bucket, staging_prefix=staging_prefix, family=WATCHGUARD_TRAFFIC_LOG_TYPE)
+    if not files:
+        con.close()
+        return {"date": date, "by_hour": [], "peak_hour": None, "peak_events": 0, "total_events": 0, "pattern": "no_data"}
+
+    names_sql = ", ".join(f"'{c}'" for c in _TRAFFIC_COLUMNS)
+    con.execute(
+        f"CREATE OR REPLACE VIEW traffic_logs AS "
+        f"SELECT * FROM read_csv({files!r}, names=[{names_sql}], header=false, null_padding=true, ignore_errors=true)"
+    )
+    rows = con.execute(
+        f"SELECT hour(timestamp::TIMESTAMP) as hr, COUNT(*) as cnt "
+        f"FROM traffic_logs "
+        f"WHERE timestamp IS NOT NULL AND strftime(timestamp::DATE, '%Y-%m-%d') = '{date}' "
+        f"GROUP BY hr ORDER BY hr"
+    ).fetchall()
+    con.close()
+
+    if not rows:
+        return {"date": date, "by_hour": [], "peak_hour": None, "peak_events": 0, "total_events": 0, "pattern": "no_data"}
+
+    by_hour = [{"hour": r[0], "events": r[1]} for r in rows]
+    peak = max(by_hour, key=lambda x: x["events"])
+    total = sum(r["events"] for r in by_hour)
+
+    # Heuristic: business-hours if peak is between 8-18
+    pattern = "business_hours" if 8 <= peak["hour"] <= 18 else "off_hours"
+    return {
+        "date": date,
+        "by_hour": by_hour,
+        "peak_hour": peak["hour"],
+        "peak_events": peak["events"],
+        "total_events": total,
+        "pattern": pattern,
+    }
+
+
+def _run_duckdb_ddos_protocol_breakdown(*, bucket: str, staging_prefix: str) -> dict[str, Any]:
+    """Protocol distribution across all traffic: event count + percentage per protocol."""
+    con = _duckdb_connect_with_s3(bucket)
+    files = _list_staging_csvs(bucket=bucket, staging_prefix=staging_prefix, family=WATCHGUARD_TRAFFIC_LOG_TYPE)
+    if not files:
+        con.close()
+        return {"protocols": [], "total_events": 0}
+
+    names_sql = ", ".join(f"'{c}'" for c in _TRAFFIC_COLUMNS)
+    con.execute(
+        f"CREATE OR REPLACE VIEW traffic_logs AS "
+        f"SELECT * FROM read_csv({files!r}, names=[{names_sql}], header=false, null_padding=true, ignore_errors=true)"
+    )
+    total = con.execute("SELECT COUNT(*) FROM traffic_logs").fetchone()[0]
+    rows = con.execute(
+        "SELECT protocol, COUNT(*) AS cnt "
+        "FROM traffic_logs WHERE protocol IS NOT NULL "
+        "GROUP BY protocol ORDER BY cnt DESC LIMIT 15"
+    ).fetchall()
+    con.close()
+
+    protocols = [
+        {
+            "rank": i + 1,
+            "protocol": r[0],
+            "events": r[1],
+            "pct": round(r[1] / total * 100, 2) if total else 0,
+        }
+        for i, r in enumerate(rows)
+    ]
+    return {"protocols": protocols, "total_events": total}
+
+
+def _execute_ddos_protocol_breakdown(
+    *,
+    run: Run,
+    input_artifact: Artifact,
+    input_payload: object,
+    observation_request: ObservationRequest,
+) -> "WatchGuardExecutionOutcome":
+    staging = _parse_staging_manifest(input_payload)
+    result = _run_duckdb_ddos_protocol_breakdown(
+        bucket=staging["bucket"],
+        staging_prefix=staging["staging_prefix"],
+    )
+    payload = {
+        "source": "ddos_protocol_breakdown",
+        "workspace": staging["workspace"],
+        "staging_prefix": staging["staging_prefix"],
+        **result,
+    }
+    top = result.get("protocols", [{}])[0] if result.get("protocols") else {}
+    return _ddos_make_outcome(
+        run=run,
+        observation_request=observation_request,
+        payload=payload,
+        subtype="watchguard.ddos_protocol_breakdown",
+        summary=f"Protocol breakdown: {len(result.get('protocols', []))} protocols. Top: {top.get('protocol')} ({top.get('pct', 0):.1f}%).",
+        structured_summary={
+            "total_events": result.get("total_events", 0),
+            "top_protocol": top.get("protocol"),
+            "top_protocol_pct": top.get("pct", 0),
+            "protocol_count": len(result.get("protocols", [])),
+        },
+    )
 
 
 # ── DuckDB / staging helpers ─────────────────────────────────────────────────
@@ -1426,34 +2176,60 @@ def _stage_zip_to_s3(
             family = classification["log_family"]
             date = classification["date"]
 
-            if not normalized.lower().endswith(".tar"):
-                continue
+            raw_bytes = zf.read(member)
 
-            tar_bytes = zf.read(member)
-            try:
-                with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:*") as tf:
-                    for tar_member in tf.getmembers():
-                        if not tar_member.isfile():
-                            continue
-                        if not tar_member.name.lower().endswith((".csv", ".txt")):
-                            continue
-                        extracted = tf.extractfile(tar_member)
-                        if extracted is None:
-                            continue
-                        csv_data = extracted.read()
-                        if not csv_data.strip():
-                            continue
+            if normalized.lower().endswith(".tar"):
+                try:
+                    with tarfile.open(fileobj=io.BytesIO(raw_bytes), mode="r:*") as tf:
+                        for tar_member in tf.getmembers():
+                            if not tar_member.isfile():
+                                continue
+                            if not tar_member.name.lower().endswith((".csv", ".txt")):
+                                continue
+                            extracted = tf.extractfile(tar_member)
+                            if extracted is None:
+                                continue
+                            csv_data = extracted.read()
+                            if not csv_data.strip():
+                                continue
 
-                        csv_filename = os.path.basename(tar_member.name.replace("\\", "/"))
-                        s3_key = f"{staging_prefix}/{family}/{date}/{csv_filename}"
-                        s3_client.put_object(Bucket=bucket, Key=s3_key, Body=csv_data)
+                            csv_filename = os.path.basename(tar_member.name.replace("\\", "/"))
+                            s3_key = f"{staging_prefix}/{family}/{date}/{csv_filename}"
+                            s3_client.put_object(Bucket=bucket, Key=s3_key, Body=csv_data, Tagging="lifecycle=staging")
 
-                        family_counts[family]["csv_files"] += 1
-                        family_counts[family]["dates"].add(date)
-                        all_dates.append(date)
-                        total_csv_files += 1
-            except tarfile.TarError:
-                continue
+                            family_counts[family]["csv_files"] += 1
+                            family_counts[family]["dates"].add(date)
+                            all_dates.append(date)
+                            total_csv_files += 1
+                except tarfile.TarError:
+                    continue
+            elif normalized.lower().endswith(".gz"):
+                try:
+                    csv_data = gzip.decompress(raw_bytes)
+                except Exception:
+                    continue
+                if not csv_data.strip():
+                    continue
+                # Use the base filename without .gz; append .csv if no text extension
+                inner_name = os.path.basename(normalized[:-3])
+                if not inner_name.lower().endswith((".csv", ".txt")):
+                    inner_name += ".csv"
+                s3_key = f"{staging_prefix}/{family}/{date}/{inner_name}"
+                s3_client.put_object(Bucket=bucket, Key=s3_key, Body=csv_data, Tagging="lifecycle=staging")
+                family_counts[family]["csv_files"] += 1
+                family_counts[family]["dates"].add(date)
+                all_dates.append(date)
+                total_csv_files += 1
+            elif normalized.lower().endswith((".csv", ".txt")):
+                if not raw_bytes.strip():
+                    continue
+                csv_filename = os.path.basename(normalized)
+                s3_key = f"{staging_prefix}/{family}/{date}/{csv_filename}"
+                s3_client.put_object(Bucket=bucket, Key=s3_key, Body=raw_bytes, Tagging="lifecycle=staging")
+                family_counts[family]["csv_files"] += 1
+                family_counts[family]["dates"].add(date)
+                all_dates.append(date)
+                total_csv_files += 1
 
     families_present = [f for f in WATCHGUARD_INGESTION_FAMILIES if family_counts[f]["csv_files"] > 0]
     date_range = {

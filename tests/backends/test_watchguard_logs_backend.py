@@ -101,6 +101,13 @@ def test_backend_descriptor_declares_capabilities_deterministically():
         "watchguard_logs.stage_workspace_zip",
         "watchguard_logs.duckdb_workspace_analytics",
         "watchguard_logs.duckdb_workspace_query",
+        "watchguard_logs.ddos_temporal_analysis",
+        "watchguard_logs.ddos_top_destinations",
+        "watchguard_logs.ddos_top_sources",
+        "watchguard_logs.ddos_segment_analysis",
+        "watchguard_logs.ddos_ip_profile",
+        "watchguard_logs.ddos_hourly_distribution",
+        "watchguard_logs.ddos_protocol_breakdown",
     ]
     assert [kind.value for kind in descriptor.produced_artifact_kinds] == [
         "normalized",

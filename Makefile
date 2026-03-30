@@ -8,25 +8,35 @@ WATCHGUARD_S3_REGION ?= us-east-2
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install-dev build up down test test-apps api-dev health demo-watchguard demo-phishing-email upload-workspace install-ui install-ui-cai ui
+TF_DIR ?= infrastructure/terraform
+TF_ENV ?= prod
+
+.PHONY: help install-dev build up down test test-apps api-dev health demo-watchguard demo-phishing-email upload-workspace install-ui install-ui-cai ui tf-locks-table tf-init tf-plan tf-apply tf-import ecs-stop ecs-start
 
 help:
 	@printf "Available targets:\n"
-	@printf "  help         Show this help output.\n"
-	@printf "  install-dev  Install the full contributor/dev Python surface for this repo.\n"
-	@printf "  build        Build the compose-managed platform-api container image.\n"
-	@printf "  up           Start only the local platform-api container.\n"
-	@printf "  down         Stop the local platform-api container.\n"
-	@printf "  test         Run the current repository test suite.\n"
-	@printf "  test-apps    Run only the app-layer test suite.\n"
-	@printf "  api-dev      Run platform-api locally without Docker for contributor/dev use.\n"
-	@printf "  health       Check the platform-api health endpoint.\n"
-	@printf "  demo-watchguard  Run the baseline WatchGuard demo through the host-run orchestrator against platform-api. Requires apps/cai-orchestrator installed in the active Python env.\n"
-	@printf "  demo-phishing-email  Run the phishing email demo through the host-run orchestrator against platform-api. Requires apps/cai-orchestrator installed in the active Python env.\n"
-	@printf "  upload-workspace ZIP=<path/to/file.zip> WORKSPACE=<workspace_id>  Upload a WatchGuard workspace ZIP to S3. Example: make upload-workspace ZIP=8011029C760FA_8011029DE7578.zip WORKSPACE=8011029C760FA_8011029DE7578\n"
-	@printf "  install-ui       Install the Streamlit platform-ui app (without CAI).\n"
-	@printf "  install-ui-cai   Install the Streamlit platform-ui app with CAI agent support.\n"
-	@printf "  ui               Launch the Streamlit platform-ui at http://localhost:8501.\n"
+	@printf "  help              Show this help output.\n"
+	@printf "  install-dev       Install the full contributor/dev Python surface for this repo.\n"
+	@printf "  build             Build the compose-managed platform-api and platform-ui images.\n"
+	@printf "  up                Start platform-api and platform-ui via Docker Compose.\n"
+	@printf "  down              Stop all Docker Compose services.\n"
+	@printf "  test              Run the current repository test suite.\n"
+	@printf "  test-apps         Run only the app-layer test suite.\n"
+	@printf "  api-dev           Run platform-api locally without Docker for contributor/dev use.\n"
+	@printf "  health            Check the platform-api health endpoint.\n"
+	@printf "  demo-watchguard   Run the baseline WatchGuard demo.\n"
+	@printf "  demo-phishing-email  Run the phishing email demo.\n"
+	@printf "  upload-workspace ZIP=<path> WORKSPACE=<id>  Upload a WatchGuard workspace ZIP to S3.\n"
+	@printf "  install-ui        Install the Streamlit platform-ui app (without CAI).\n"
+	@printf "  install-ui-cai    Install the Streamlit platform-ui app with CAI agent support.\n"
+	@printf "  ui                Launch the Streamlit platform-ui at http://localhost:8501.\n"
+	@printf "  tf-locks-table    Create DynamoDB table for Terraform state locking (run once per account).\n"
+	@printf "  tf-init           Initialize Terraform (run once). TF_ENV=prod|staging\n"
+	@printf "  tf-plan           Preview infrastructure changes. TF_ENV=prod|staging\n"
+	@printf "  tf-apply          Apply infrastructure changes. TF_ENV=prod|staging\n"
+	@printf "  tf-import         Import existing AWS resources into Terraform state (run once).\n"
+	@printf "  ecs-stop          Scale all ECS services to 0 (cost saving when not in use).\n"
+	@printf "  ecs-start         Scale ECS services back to 1.\n"
 
 install-dev:
 	$(PYTHON) -m pip install -e packages/platform-contracts
@@ -37,10 +47,10 @@ install-dev:
 	$(PYTHON) -m pip install -e 'apps/cai-orchestrator[test]'
 
 build:
-	docker compose build platform-api
+	docker compose build platform-api platform-ui
 
 up:
-	docker compose up -d platform-api
+	docker compose up -d platform-api platform-ui
 
 down:
 	docker compose down
@@ -58,10 +68,10 @@ health:
 	$(PYTHON) -c "import json, urllib.request; print(json.dumps(json.loads(urllib.request.urlopen('$(PLATFORM_API_BASE_URL)/health').read().decode()), indent=2, sort_keys=True))"
 
 demo-watchguard:
-	PLATFORM_API_BASE_URL='$(PLATFORM_API_BASE_URL)' $(PYTHON) -m cai_orchestrator run-watchguard --title "WatchGuard demo case" --summary "Run the minimal WatchGuard demo slice." --payload-file '$(DEMO_WATCHGUARD_PAYLOAD)'
+	PLATFORM_API_BASE_URL='$(PLATFORM_API_BASE_URL)' $(PYTHON) -m cai_orchestrator run-watchguard --client-id "demo-client" --title "WatchGuard demo case" --summary "Run the minimal WatchGuard demo slice." --payload-file '$(DEMO_WATCHGUARD_PAYLOAD)'
 
 demo-phishing-email:
-	PLATFORM_API_BASE_URL='$(PLATFORM_API_BASE_URL)' $(PYTHON) -m cai_orchestrator run-phishing-email-basic-assessment --title "Phishing email demo case" --summary "Run the phishing email basic assessment slice." --payload-file '$(DEMO_PHISHING_EMAIL_PAYLOAD)'
+	PLATFORM_API_BASE_URL='$(PLATFORM_API_BASE_URL)' $(PYTHON) -m cai_orchestrator run-phishing-email-basic-assessment --client-id "demo-client" --title "Phishing email demo case" --summary "Run the phishing email basic assessment slice." --payload-file '$(DEMO_PHISHING_EMAIL_PAYLOAD)'
 
 install-ui:
 	$(PYTHON) -m pip install -e apps/platform-ui
@@ -71,6 +81,37 @@ install-ui-cai:
 
 ui:
 	$(PYTHON) -m streamlit run apps/platform-ui/src/platform_ui/app.py
+
+tf-locks-table:
+	aws dynamodb create-table \
+		--table-name cai-platform-tf-locks \
+		--attribute-definitions AttributeName=LockID,AttributeType=S \
+		--key-schema AttributeName=LockID,KeyType=HASH \
+		--billing-mode PAY_PER_REQUEST \
+		--region $(WATCHGUARD_S3_REGION)
+	@echo "DynamoDB table cai-platform-tf-locks created."
+
+tf-init:
+	cd $(TF_DIR) && terraform init
+
+tf-plan:
+	cd $(TF_DIR) && terraform plan -var-file=environments/$(TF_ENV)/terraform.tfvars
+
+tf-apply:
+	cd $(TF_DIR) && terraform apply -var-file=environments/$(TF_ENV)/terraform.tfvars
+
+tf-import:
+	cd $(TF_DIR) && bash import.sh
+
+ecs-stop:
+	aws ecs update-service --cluster cai-platform --service platform-api --desired-count 0 --region us-east-2
+	aws ecs update-service --cluster cai-platform --service platform-ui  --desired-count 0 --region us-east-2
+	@echo "ECS services scaled to 0."
+
+ecs-start:
+	aws ecs update-service --cluster cai-platform --service platform-api --desired-count 1 --region us-east-2
+	aws ecs update-service --cluster cai-platform --service platform-ui  --desired-count 1 --region us-east-2
+	@echo "ECS services scaled to 1."
 
 upload-workspace:
 	@if [ -z "$(ZIP)" ] || [ -z "$(WORKSPACE)" ]; then \

@@ -20,10 +20,9 @@ tests/
 make install-dev   # instalar todos los paquetes (si no está hecho)
 
 make test          # todos los tests
-make test-fast     # sin marcadores slow
 pytest tests/apps/ -v              # solo tests del API
 pytest tests/ -k "watchguard" -v   # filtrar por nombre
-pytest tests/backends/test_watchguard_logs.py::test_normalize -v  # un test específico
+pytest tests/backends/test_watchguard_logs_backend.py::test_normalize -v  # un test específico
 ```
 
 ## Entorno de tests

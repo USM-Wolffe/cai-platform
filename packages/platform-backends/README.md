@@ -25,7 +25,7 @@ Analiza logs WatchGuard. Soporta logs locales (CSV en payload JSON) y workspace 
 | `watchguard_logs.models` | Modelos internos del backend |
 | `watchguard_logs.errors` | Errores específicos del backend |
 
-**Operaciones**: `normalize_and_summarize`, `filter_denied_events`, `analytics_bundle_basic`, `top_talkers_basic`, `workspace_zip_ingestion`, `stage_workspace_zip`, `duckdb_workspace_analytics`, `guarded_filtered_rows` (guarded), `duckdb_workspace_query` (guarded).
+**Operaciones**: `normalize_and_summarize`, `filter_denied_events`, `analytics_bundle_basic`, `top_talkers_basic`, `workspace_zip_ingestion`, `stage_workspace_zip`, `duckdb_workspace_analytics`, `ddos_temporal_analysis`, `ddos_top_destinations`, `ddos_top_sources`, `ddos_segment_analysis`, `ddos_ip_profile`, `ddos_hourly_distribution`, `ddos_protocol_breakdown`, `guarded_filtered_rows` (guarded), `duckdb_workspace_query` (guarded).
 
 ### `platform_backends.phishing_email`
 

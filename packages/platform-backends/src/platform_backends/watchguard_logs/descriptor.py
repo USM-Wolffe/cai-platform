@@ -28,6 +28,15 @@ WATCHGUARD_NORMALIZE_SUMMARY_OPERATION = "watchguard_logs.normalize_and_summariz
 WATCHGUARD_TOP_TALKERS_BASIC_QUERY_CLASS = "watchguard_logs.top_talkers_basic"
 WATCHGUARD_TOP_TALKERS_BASIC_OPERATION = "watchguard_logs.top_talkers_basic"
 
+# DDoS investigation operations
+WATCHGUARD_DDOS_TEMPORAL_ANALYSIS_OPERATION = "watchguard_logs.ddos_temporal_analysis"
+WATCHGUARD_DDOS_TOP_DESTINATIONS_OPERATION = "watchguard_logs.ddos_top_destinations"
+WATCHGUARD_DDOS_TOP_SOURCES_OPERATION = "watchguard_logs.ddos_top_sources"
+WATCHGUARD_DDOS_SEGMENT_ANALYSIS_OPERATION = "watchguard_logs.ddos_segment_analysis"
+WATCHGUARD_DDOS_IP_PROFILE_OPERATION = "watchguard_logs.ddos_ip_profile"
+WATCHGUARD_DDOS_HOURLY_DISTRIBUTION_OPERATION = "watchguard_logs.ddos_hourly_distribution"
+WATCHGUARD_DDOS_PROTOCOL_BREAKDOWN_OPERATION = "watchguard_logs.ddos_protocol_breakdown"
+
 
 def get_watchguard_logs_backend_descriptor() -> BackendDescriptor:
     """Return the deterministic descriptor for the first WatchGuard log backend slice."""
@@ -71,6 +80,13 @@ def get_watchguard_logs_backend_descriptor() -> BackendDescriptor:
             WATCHGUARD_STAGE_WORKSPACE_ZIP_OPERATION,
             WATCHGUARD_DUCKDB_WORKSPACE_ANALYTICS_OPERATION,
             WATCHGUARD_DUCKDB_WORKSPACE_QUERY_CLASS,
+            WATCHGUARD_DDOS_TEMPORAL_ANALYSIS_OPERATION,
+            WATCHGUARD_DDOS_TOP_DESTINATIONS_OPERATION,
+            WATCHGUARD_DDOS_TOP_SOURCES_OPERATION,
+            WATCHGUARD_DDOS_SEGMENT_ANALYSIS_OPERATION,
+            WATCHGUARD_DDOS_IP_PROFILE_OPERATION,
+            WATCHGUARD_DDOS_HOURLY_DISTRIBUTION_OPERATION,
+            WATCHGUARD_DDOS_PROTOCOL_BREAKDOWN_OPERATION,
         ],
         accepted_artifact_kinds=[ArtifactKind.INPUT],
         produced_artifact_kinds=[ArtifactKind.NORMALIZED, ArtifactKind.ANALYSIS_OUTPUT, ArtifactKind.QUERY_RESULT],

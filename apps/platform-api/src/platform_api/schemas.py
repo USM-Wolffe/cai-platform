@@ -40,6 +40,7 @@ class CreateRunRequest(ApiModel):
 class ExecuteObservationRequest(ApiModel):
     requested_by: str = Field(default="platform_api", min_length=1)
     input_artifact_id: str | None = None
+    parameters: dict[str, Any] = Field(default_factory=dict)
 
 
 class ApprovalDecisionInput(ApiModel):

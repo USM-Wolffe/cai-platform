@@ -3,8 +3,25 @@ services:
     build:
       context: .
       dockerfile: apps/platform-api/Dockerfile
+    env_file:
+      - path: .env
+        required: false
     environment:
       PLATFORM_API_HOST: 0.0.0.0
       PLATFORM_API_PORT: 8000
     ports:
       - "${PLATFORM_API_PORT:-8000}:8000"
+
+  platform-ui:
+    build:
+      context: .
+      dockerfile: apps/platform-ui/Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PLATFORM_API_BASE_URL: http://platform-api:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      - platform-api

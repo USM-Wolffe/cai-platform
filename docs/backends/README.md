@@ -25,6 +25,13 @@ Analiza logs de firewall WatchGuard exportados desde el portal. Soporta dos modo
 | `watchguard_logs.workspace_zip_ingestion` | `POST /runs/{id}/observations/watchguard-ingest-workspace-zip` | Ingesta ZIP desde S3 cargando en RAM (solo ZIPs pequeños) |
 | `watchguard_logs.stage_workspace_zip` | `POST /runs/{id}/observations/watchguard-stage-workspace-zip` | Descarga ZIP streaming → extrae TARs → sube CSVs individuales a S3 staging. **Preferido para ZIPs grandes.** |
 | `watchguard_logs.duckdb_workspace_analytics` | `POST /runs/{id}/observations/watchguard-duckdb-workspace-analytics` | DuckDB lee CSVs desde S3 via httpfs. Retorna: `top_src_ips`, `top_dst_ips`, `action_counts`, `deny_count`, `protocol_breakdown`, `alarm_type_counts`, `time_range` |
+| `watchguard_logs.ddos_temporal_analysis` | `POST /runs/{id}/observations/watchguard-ddos-temporal-analysis` | Serie temporal y rango observado del evento DDoS sobre staging S3 |
+| `watchguard_logs.ddos_top_destinations` | `POST /runs/{id}/observations/watchguard-ddos-top-destinations` | Destinos más impactados por volumen y número de eventos |
+| `watchguard_logs.ddos_top_sources` | `POST /runs/{id}/observations/watchguard-ddos-top-sources` | Fuentes más activas por volumen y número de eventos |
+| `watchguard_logs.ddos_segment_analysis` | `POST /runs/{id}/observations/watchguard-ddos-segment-analysis` | Drill-down por segmento o red CIDR (requiere `segment` en `parameters`) |
+| `watchguard_logs.ddos_ip_profile` | `POST /runs/{id}/observations/watchguard-ddos-ip-profile` | Perfil detallado de una IP específica (requiere `ip` en `parameters`) |
+| `watchguard_logs.ddos_hourly_distribution` | `POST /runs/{id}/observations/watchguard-ddos-hourly-distribution` | Distribución horaria para una fecha concreta (requiere `date` en `parameters`) |
+| `watchguard_logs.ddos_protocol_breakdown` | `POST /runs/{id}/observations/watchguard-ddos-protocol-breakdown` | Distribución por protocolo para el workspace staged |
 
 ### Queries guarded (requieren aprobación explícita)
 
@@ -77,6 +84,18 @@ Analiza logs de firewall WatchGuard exportados desde el portal. Soporta dos modo
 | `event` | `type`, `timestamp` |
 
 Operadores soportados: `=`, `!=`, `like`, `in`, `>`, `<`, `>=`, `<=`.
+
+### Parámetros requeridos por las observaciones DDoS
+
+| Operación | Parámetros |
+|---|---|
+| `ddos_temporal_analysis` | Ninguno |
+| `ddos_top_destinations` | Ninguno |
+| `ddos_top_sources` | Ninguno |
+| `ddos_segment_analysis` | `segment`, por ejemplo `159.60.0.0/16` |
+| `ddos_ip_profile` | `ip`, por ejemplo `223.123.92.149` |
+| `ddos_hourly_distribution` | `date`, por ejemplo `2025-10-16` |
+| `ddos_protocol_breakdown` | Ninguno |
 
 ### Estructura S3
 

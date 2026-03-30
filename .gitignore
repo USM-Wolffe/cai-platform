@@ -12,4 +12,7 @@ dist/
 .env.*
 !.env.example
 /logs/
+/.egs_cases/
+/runtime/
+/memory/
 *.egg-info/

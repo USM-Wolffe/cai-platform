@@ -1,4 +1,0 @@
-cai-platform-contracts>=0.1.0
-
-[test]
-pytest<9,>=8

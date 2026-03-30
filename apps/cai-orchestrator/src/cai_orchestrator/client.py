@@ -41,7 +41,7 @@ class PlatformApiClient:
         *,
         base_url: str,
         session: SyncHttpSession | None = None,
-        timeout: float = 30.0,
+        timeout: float = 120.0,
     ) -> None:
         if not base_url.strip():
             raise ValueError("base_url must not be empty")
@@ -231,6 +231,121 @@ class PlatformApiClient:
             json=payload,
         )
 
+    def execute_watchguard_ddos_temporal_analysis(
+        self,
+        *,
+        run_id: str,
+        requested_by: str,
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"requested_by": requested_by}
+        if input_artifact_id is not None:
+            payload["input_artifact_id"] = input_artifact_id
+        return self._request(
+            "POST",
+            f"/runs/{run_id}/observations/watchguard-ddos-temporal-analysis",
+            json=payload,
+        )
+
+    def execute_watchguard_ddos_top_destinations(
+        self,
+        *,
+        run_id: str,
+        requested_by: str,
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"requested_by": requested_by}
+        if input_artifact_id is not None:
+            payload["input_artifact_id"] = input_artifact_id
+        return self._request(
+            "POST",
+            f"/runs/{run_id}/observations/watchguard-ddos-top-destinations",
+            json=payload,
+        )
+
+    def execute_watchguard_ddos_top_sources(
+        self,
+        *,
+        run_id: str,
+        requested_by: str,
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"requested_by": requested_by}
+        if input_artifact_id is not None:
+            payload["input_artifact_id"] = input_artifact_id
+        return self._request(
+            "POST",
+            f"/runs/{run_id}/observations/watchguard-ddos-top-sources",
+            json=payload,
+        )
+
+    def execute_watchguard_ddos_segment_analysis(
+        self,
+        *,
+        run_id: str,
+        segment: str,
+        requested_by: str,
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"requested_by": requested_by, "parameters": {"segment": segment}}
+        if input_artifact_id is not None:
+            payload["input_artifact_id"] = input_artifact_id
+        return self._request(
+            "POST",
+            f"/runs/{run_id}/observations/watchguard-ddos-segment-analysis",
+            json=payload,
+        )
+
+    def execute_watchguard_ddos_ip_profile(
+        self,
+        *,
+        run_id: str,
+        ip: str,
+        requested_by: str,
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"requested_by": requested_by, "parameters": {"ip": ip}}
+        if input_artifact_id is not None:
+            payload["input_artifact_id"] = input_artifact_id
+        return self._request(
+            "POST",
+            f"/runs/{run_id}/observations/watchguard-ddos-ip-profile",
+            json=payload,
+        )
+
+    def execute_watchguard_ddos_hourly_distribution(
+        self,
+        *,
+        run_id: str,
+        date: str,
+        requested_by: str,
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"requested_by": requested_by, "parameters": {"date": date}}
+        if input_artifact_id is not None:
+            payload["input_artifact_id"] = input_artifact_id
+        return self._request(
+            "POST",
+            f"/runs/{run_id}/observations/watchguard-ddos-hourly-distribution",
+            json=payload,
+        )
+
+    def execute_watchguard_ddos_protocol_breakdown(
+        self,
+        *,
+        run_id: str,
+        requested_by: str,
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"requested_by": requested_by}
+        if input_artifact_id is not None:
+            payload["input_artifact_id"] = input_artifact_id
+        return self._request(
+            "POST",
+            f"/runs/{run_id}/observations/watchguard-ddos-protocol-breakdown",
+            json=payload,
+        )
+
     def execute_watchguard_duckdb_workspace_query(
         self,
         *,
@@ -313,6 +428,9 @@ class PlatformApiClient:
             json=payload,
         )
 
+    def list_cases(self, *, client_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/cases?client_id={client_id}")
+
     def get_case(self, *, case_id: str) -> dict[str, Any]:
         return self._request("GET", f"/cases/{case_id}")
 
@@ -345,7 +463,14 @@ class PlatformApiClient:
         except httpx.HTTPError as exc:
             raise PlatformApiUnavailableError(f"platform-api request failed for {method} {path}") from exc
 
-        payload = response.json()
+        try:
+            payload = response.json()
+        except Exception as exc:
+            raise PlatformApiUnavailableError(
+                f"platform-api returned non-JSON response (HTTP {response.status_code}) "
+                f"for {method} {path}. Body: {getattr(response, 'text', '')[:200] or '(empty)'}"
+            ) from exc
+
         if response.status_code >= 400:
             raise PlatformApiRequestError(
                 method=method,
