@@ -134,15 +134,18 @@ def _build_context(
     report_date = _fmt_date(created_at)
 
     # ── Logo as base64 data URI ──────────────────────────────────────────
-    # Prefer PNG version (no background issues); fall back to SVG if not found.
+    # Search order: CWD (Docker WORKDIR /app), repo-root heuristic (editable dev install)
     repo_root = Path(__file__).parent.parent.parent.parent.parent.parent
     logo_b64 = ""
-    png_path = repo_root / "logo_egs.png"
-    svg_path = repo_root / "logo_egs.svg"
-    if png_path.exists():
-        logo_b64 = "data:image/png;base64," + base64.b64encode(png_path.read_bytes()).decode("ascii")
-    elif svg_path.exists():
-        logo_b64 = "data:image/svg+xml;base64," + base64.b64encode(svg_path.read_bytes()).decode("ascii")
+    for base_dir in (Path.cwd(), repo_root):
+        png_path = base_dir / "logo_egs.png"
+        svg_path = base_dir / "logo_egs.svg"
+        if png_path.exists():
+            logo_b64 = "data:image/png;base64," + base64.b64encode(png_path.read_bytes()).decode("ascii")
+            break
+        if svg_path.exists():
+            logo_b64 = "data:image/svg+xml;base64," + base64.b64encode(svg_path.read_bytes()).decode("ascii")
+            break
 
     # Stage label mapping
     stage_labels = {
@@ -260,6 +263,60 @@ def _build_context(
         # Report title (used in @page header via CSS string-set)
         "report_title": f"LL-IR-{client_name.upper().replace(' ', '_')[:20]}",
     }
+
+
+def generate_report_from_context(
+    case_data: dict[str, Any],
+    client_name: str,
+    informante: str,
+    crm_case: str,
+    fmt: str = "html",
+) -> bytes:
+    """Render a report from an in-memory case_data dict. Returns file bytes.
+
+    Same as generate_report() but accepts the case_data dict directly instead
+    of reading from disk. Useful for Streamlit where no local filesystem is needed.
+
+    Args:
+        case_data: Dict with same structure as case-XXXX-report.json
+        client_name: Client display name for the cover page
+        informante: Name of the person who requested the report
+        crm_case: CRM/ticket reference number
+        fmt: "html" (default) or "pdf"
+
+    Returns:
+        File bytes (UTF-8 HTML or binary PDF)
+    """
+    try:
+        from jinja2 import Environment, FileSystemLoader, select_autoescape
+    except ImportError as exc:
+        raise RuntimeError(
+            "jinja2 is required. Install with: pip install jinja2"
+        ) from exc
+
+    context = _build_context(case_data, client_name, informante, crm_case)
+    context["css"] = (_HERE / "styles.css").read_text(encoding="utf-8")
+
+    env = Environment(
+        loader=FileSystemLoader(str(_HERE)),
+        autoescape=select_autoescape(["html"]),
+    )
+    html_content = env.get_template("template.html").render(**context)
+
+    if fmt == "pdf":
+        try:
+            from weasyprint import HTML as WeasyHTML
+        except ImportError as exc:
+            raise RuntimeError(
+                "weasyprint is required for PDF output. "
+                "Install with: pip install weasyprint"
+            ) from exc
+        import io
+        buf = io.BytesIO()
+        WeasyHTML(string=html_content, base_url=str(_HERE)).write_pdf(buf)
+        return buf.getvalue()
+    else:
+        return html_content.encode("utf-8")
 
 
 def generate_report(

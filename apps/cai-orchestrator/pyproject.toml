@@ -28,3 +28,6 @@ test = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+cai_orchestrator = ["report/*.html", "report/*.css"]

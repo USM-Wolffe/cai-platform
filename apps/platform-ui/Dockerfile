@@ -5,12 +5,22 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
+# WeasyPrint system dependencies (GLib, Cairo, Pango)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libglib2.0-0 \
+    libcairo2 \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libgdk-pixbuf-2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY packages/platform-contracts /app/packages/platform-contracts
 COPY packages/platform-core /app/packages/platform-core
 COPY packages/platform-adapters /app/packages/platform-adapters
 COPY packages/platform-backends /app/packages/platform-backends
 COPY apps/cai-orchestrator /app/apps/cai-orchestrator
 COPY apps/platform-ui /app/apps/platform-ui
+COPY logo_egs.png logo_egs.svg /app/
 
 RUN pip install --no-cache-dir \
     /app/packages/platform-contracts \

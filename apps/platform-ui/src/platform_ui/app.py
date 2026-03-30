@@ -75,6 +75,12 @@ finally:
 import logging as _logging
 _logging.getLogger("LiteLLM").setLevel(_logging.CRITICAL)
 
+try:
+    from cai_orchestrator.report.generate import generate_report_from_context as _generate_report_from_context
+    _REPORT_AVAILABLE = True
+except ImportError:
+    _REPORT_AVAILABLE = False
+
 # ── Constants (env defaults, all overridable from sidebar) ──────────────────
 
 _DEFAULT_API_URL = os.getenv("PLATFORM_API_BASE_URL", "http://127.0.0.1:8000")
@@ -285,6 +291,7 @@ def _find_existing_staging(settings: dict[str, Any], workspace_id: str) -> dict[
         return {
             "case_id": case_data.get("case", {}).get("case_id"),
             "run_id": run_id,
+            "workspace_id": workspace_id,
             "staging_artifact_id": staging_art.get("artifact_id"),
             "analytics_content": analytics_art.get("metadata") if analytics_art else None,
             "ddos_results": ddos_results or None,
@@ -299,6 +306,8 @@ def _restore_investigation_state(
     staging_artifact_id: str,
     analytics_content: dict[str, Any] | None,
     ddos_results: dict[str, Any] | None = None,
+    case_id: str | None = None,
+    workspace_id: str | None = None,
 ) -> None:
     """Restore session state from an existing run + staging artifact. Zero API calls."""
     st.session_state["wg_run_id"] = run_id
@@ -311,6 +320,10 @@ def _restore_investigation_state(
         st.session_state["wg_ddos_results"] = ddos_results
     else:
         st.session_state.pop("wg_ddos_results", None)
+    if case_id:
+        st.session_state["wg_case_id"] = case_id
+    if workspace_id:
+        st.session_state["wg_workspace_id"] = workspace_id
 
 
 def _parse_cai_verdict(final_output: Any) -> dict[str, Any] | None:
@@ -361,6 +374,134 @@ def _build_cai_chat_input(
     return raw_history + [{"role": "user", "content": user_input}]
 
 
+# ── AbuseIPDB integration ─────────────────────────────────────────────────────
+
+
+def _query_abuseipdb(ip: str, api_key: str) -> dict[str, Any]:
+    """Query AbuseIPDB v2 /check endpoint. Result cached in session state."""
+    cache_key = f"_abuseipdb_{ip}"
+    if cache_key in st.session_state:
+        return st.session_state[cache_key]
+    try:
+        import httpx as _httpx
+        resp = _httpx.get(
+            "https://api.abuseipdb.com/api/v2/check",
+            headers={"Key": api_key, "Accept": "application/json"},
+            params={"ipAddress": ip, "maxAgeInDays": 90},
+            timeout=10.0,
+        )
+        data = resp.json().get("data", {})
+    except Exception as exc:
+        data = {"error": str(exc)}
+    st.session_state[cache_key] = data
+    return data
+
+
+def _render_abuseipdb_data(data: dict[str, Any], ip: str) -> None:
+    if data.get("error"):
+        st.error(f"AbuseIPDB error: {data['error']}")
+        return
+    score = data.get("abuseConfidenceScore", 0)
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Abuse Score", f"{score}%")
+    col2.metric("Reportes totales", data.get("totalReports", 0))
+    col3.metric("País", data.get("countryCode", "—"))
+    col4.metric("ISP", (data.get("isp") or "—")[:25])
+    info_parts = []
+    if data.get("usageType"):
+        info_parts.append(f"Uso: {data['usageType']}")
+    if data.get("lastReportedAt"):
+        info_parts.append(f"Último reporte: {data['lastReportedAt'][:10]}")
+    if info_parts:
+        st.caption("  |  ".join(info_parts))
+    st.markdown(f"[Ver perfil completo en AbuseIPDB →](https://www.abuseipdb.com/check/{ip})")
+
+
+# ── Report export helpers ─────────────────────────────────────────────────────
+
+
+def _build_report_case_data(
+    case_id: str,
+    workspace_id: str,
+    ddos_results: dict[str, Any],
+    created_at: str | None = None,
+) -> dict[str, Any]:
+    """Assemble a case_data dict compatible with generate_report_from_context()."""
+    source_map = {
+        "temporal": "ddos_temporal_analysis",
+        "sources": "ddos_top_sources",
+        "destinations": "ddos_top_destinations",
+        "protocols": "ddos_protocol_breakdown",
+        "hourly": "ddos_hourly_distribution",
+        "segment": "ddos_segment_analysis",
+        "ip_profile": "ddos_ip_profile",
+    }
+    evidence_items = []
+    artifact_payloads: dict[str, Any] = {}
+    for key, source in source_map.items():
+        if data := ddos_results.get(key):
+            fake_id = f"report-{key}"
+            evidence_items.append({"source": source, "artifact_refs": [fake_id]})
+            artifact_payloads[fake_id] = data
+
+    return {
+        "case_id": case_id,
+        "incident": {
+            "workspace": workspace_id,
+            "observed_signals": [],
+            "created_at": created_at or "",
+        },
+        "classification": {},
+        "findings": [],
+        "decisions": [],
+        "stage_progress": [],
+        "timeline": [],
+        "severity": "—",
+        "current_strategy_id": "ddos_nist_v1",
+        "evidence_items": evidence_items,
+        "artifact_payloads": artifact_payloads,
+    }
+
+
+# ── Phishing dashboard data ───────────────────────────────────────────────────
+
+
+def _load_phishing_dashboard_data(settings: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return all phishing cases with assessment metadata extracted."""
+    client = make_client(settings)
+    try:
+        resp = client.list_cases(client_id=settings["client_id"])
+    finally:
+        client.close()
+    cases = resp.get("cases", [])
+    rows = []
+    for c in cases:
+        case = c.get("case", {})
+        if case.get("workflow_type") != PHISHING_EMAIL_WORKFLOW_TYPE:
+            continue
+        artifacts = c.get("artifacts", [])
+        # Assessment artifact: any ANALYSIS_OUTPUT whose metadata has risk_level
+        meta: dict[str, Any] = {}
+        for a in artifacts:
+            m = a.get("metadata") or {}
+            if isinstance(m, dict) and "risk_level" in m:
+                meta = m
+                break
+        sender_raw = meta.get("sender") or {}
+        sender_email = sender_raw.get("email", "—") if isinstance(sender_raw, dict) else str(sender_raw)
+        rows.append({
+            "case_id": case.get("case_id", ""),
+            "title": case.get("title", "—"),
+            "created_at": case.get("created_at", ""),
+            "risk_level": meta.get("risk_level", "unknown"),
+            "risk_score": meta.get("risk_score", 0),
+            "triggered_rules": meta.get("triggered_rules", []),
+            "sender": sender_email,
+            "subject": meta.get("subject", "—"),
+        })
+    return sorted(rows, key=lambda r: r["created_at"], reverse=True)
+
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 
@@ -402,6 +543,15 @@ def render_sidebar() -> dict[str, Any]:
         aws_region = st.text_input("Region", value=_DEFAULT_REGION, key="s_aws_region")
         s3_bucket = st.text_input("S3 Bucket", value=_DEFAULT_BUCKET, key="s_s3_bucket")
 
+        st.subheader("Integraciones (opcional)")
+        abuseipdb_key = st.text_input(
+            "AbuseIPDB API Key",
+            type="password",
+            value=os.getenv("ABUSEIPDB_API_KEY", ""),
+            key="s_abuseipdb_key",
+            help="Para enriquecimiento de reputación IP. Regístrate gratis en abuseipdb.com",
+        )
+
     return {
         "api_url": api_url.strip() or _DEFAULT_API_URL,
         "client_id": client_id.strip() or "default",
@@ -410,6 +560,7 @@ def render_sidebar() -> dict[str, Any]:
         "aws_secret": aws_secret.strip() or None,
         "aws_region": aws_region.strip() or _DEFAULT_REGION,
         "s3_bucket": s3_bucket.strip() or _DEFAULT_BUCKET,
+        "abuseipdb_key": abuseipdb_key.strip() or None,
     }
 
 
@@ -582,6 +733,8 @@ def render_watchguard_tab(settings: dict[str, Any]) -> None:
                         prior["staging_artifact_id"],
                         prior.get("analytics_content"),
                         prior.get("ddos_results"),
+                        case_id=prior.get("case_id"),
+                        workspace_id=prior.get("workspace_id", workspace_id),
                     )
                 st.rerun()
             nueva_label = "⊕ Nueva investigación"
@@ -702,6 +855,8 @@ def _run_watchguard_investigation(
             st.session_state["wg_run_id"] = run_id
             st.session_state["wg_staging_artifact_id"] = staging_artifact_id
             st.session_state["wg_analytics_content"] = content
+            st.session_state["wg_case_id"] = case_id
+            st.session_state["wg_workspace_id"] = workspace_id
             st.session_state["wg_chat_history"] = []
             st.session_state["wg_chat_raw_history"] = None
 
@@ -1006,6 +1161,69 @@ def _render_ddos_suite(settings: dict[str, Any]) -> None:
             if ip_profile.get("top_dst_ips"):
                 st.caption("IPs destino más atacadas por este IP")
                 st.dataframe(pd.DataFrame(ip_profile["top_dst_ips"]), use_container_width=True, hide_index=True)
+
+            # ── AbuseIPDB enrichment ───────────────────────────────────────
+            ip_addr = ip_profile.get("ip", "")
+            abuseipdb_key = settings.get("abuseipdb_key")
+            if ip_addr and abuseipdb_key:
+                cached = st.session_state.get(f"_abuseipdb_{ip_addr}")
+                if cached is None:
+                    if st.button("Enriquecer con AbuseIPDB", key="wg_abuseipdb_query"):
+                        with st.spinner("Consultando AbuseIPDB..."):
+                            _query_abuseipdb(ip_addr, abuseipdb_key)
+                        st.rerun()
+                else:
+                    st.markdown("---")
+                    _render_abuseipdb_data(cached, ip_addr)
+            elif ip_addr:
+                st.caption(
+                    "Configura la AbuseIPDB API Key en el sidebar para ver reputación de este IP."
+                )
+
+    # ── Export Report ─────────────────────────────────────────────────────────
+    if _REPORT_AVAILABLE:
+        with st.expander("Exportar Informe"):
+            col_cn, col_inf, col_crm = st.columns(3)
+            client_name = col_cn.text_input("Cliente", value="", key="rpt_client_name")
+            informante = col_inf.text_input("Informante", value="", key="rpt_informante")
+            crm_case = col_crm.text_input("Caso CRM / Ticket", value="", key="rpt_crm_case")
+            fmt = st.radio("Formato", ["HTML", "PDF"], horizontal=True, key="rpt_fmt")
+
+            if st.button("Generar informe", key="rpt_generate"):
+                if not ddos:
+                    st.warning("No hay resultados DDoS para exportar. Corre el análisis primero.")
+                else:
+                    try:
+                        with st.spinner("Generando informe..."):
+                            case_data_for_report = _build_report_case_data(
+                                case_id=st.session_state.get("wg_case_id", "unknown"),
+                                workspace_id=st.session_state.get("wg_workspace_id", "workspace"),
+                                ddos_results=ddos,
+                            )
+                            report_bytes = _generate_report_from_context(
+                                case_data_for_report,
+                                client_name=client_name or "—",
+                                informante=informante or "—",
+                                crm_case=crm_case or "—",
+                                fmt=fmt.lower(),
+                            )
+                        ext = fmt.lower()
+                        st.session_state["rpt_bytes"] = (report_bytes, ext, fmt)
+                    except Exception as exc:
+                        st.error(f"Error generando informe: {exc}")
+
+            rpt_result = st.session_state.get("rpt_bytes")
+            if rpt_result:
+                report_bytes, ext, fmt_label = rpt_result
+                ws_id = st.session_state.get("wg_workspace_id", "workspace")
+                mime = "text/html" if ext == "html" else "application/pdf"
+                st.download_button(
+                    f"Descargar {fmt_label}",
+                    data=report_bytes,
+                    file_name=f"informe-ddos-{ws_id[:30]}.{ext}",
+                    mime=mime,
+                    key="rpt_download",
+                )
 
     if st.button("Re-ejecutar análisis DDoS", key="wg_ddos_rerun"):
         del st.session_state["wg_ddos_results"]
@@ -1387,10 +1605,18 @@ def render_case_history_tab(settings: dict[str, Any]) -> None:
                             key=f"ch_continue_{selected_case_id}",
                             type="primary",
                         ):
+                            title_str = case.get("title", "")
+                            ws_from_title = (
+                                title_str.removeprefix("WatchGuard — ")
+                                if title_str.startswith("WatchGuard — ")
+                                else "unknown"
+                            )
                             with st.spinner("Restaurando estado de investigación..."):
                                 _restore_investigation_state(
                                     settings, run_id, staging_artifact_id,
                                     analytics_content, ddos_results or None,
+                                    case_id=case.get("case_id"),
+                                    workspace_id=ws_from_title,
                                 )
                             st.session_state["ch_pending_navigate"] = (
                                 f"Investigación restaurada — ve al tab **WatchGuard S3 Investigation**."
@@ -1419,6 +1645,81 @@ def render_case_history_tab(settings: dict[str, Any]) -> None:
                                 st.error(f"Error leyendo artefacto: {exc}")
 
 
+# ── Phishing Dashboard ────────────────────────────────────────────────────────
+
+
+def _render_phishing_dashboard(settings: dict[str, Any]) -> None:
+    st.subheader("Dashboard de Casos Phishing")
+
+    col_btn, _ = st.columns([1, 4])
+    if col_btn.button("Actualizar dashboard", key="ph_dash_refresh"):
+        st.session_state.pop("ph_dash_data", None)
+
+    if "ph_dash_data" not in st.session_state:
+        with st.spinner("Cargando casos..."):
+            try:
+                st.session_state["ph_dash_data"] = _load_phishing_dashboard_data(settings)
+            except Exception as exc:
+                st.error(f"Error cargando dashboard: {exc}")
+                return
+
+    rows: list[dict] = st.session_state.get("ph_dash_data", [])
+    if not rows:
+        st.info("No hay casos phishing analizados aún.")
+        st.divider()
+        return
+
+    total = len(rows)
+    risk_counts: dict[str, int] = {}
+    rule_counter: dict[str, int] = {}
+    for r in rows:
+        level = (r["risk_level"] or "unknown").lower()
+        risk_counts[level] = risk_counts.get(level, 0) + 1
+        for rule in r.get("triggered_rules", []):
+            rule_id = rule.get("rule_id") or rule.get("id") or "?"
+            rule_counter[rule_id] = rule_counter.get(rule_id, 0) + 1
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total analizados", total)
+    col2.metric("Alto riesgo", risk_counts.get("high", 0))
+    col3.metric("Riesgo medio", risk_counts.get("medium", 0))
+    col4.metric("Bajo riesgo", risk_counts.get("low", 0))
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        risk_df_data = [
+            {"Nivel": k.capitalize(), "Casos": v}
+            for k, v in sorted(risk_counts.items(), key=lambda x: x[1], reverse=True)
+            if v > 0
+        ]
+        if risk_df_data:
+            st.caption("Distribución de riesgo")
+            st.bar_chart(pd.DataFrame(risk_df_data).set_index("Nivel"))
+
+    with col_b:
+        if rule_counter:
+            top_rules = sorted(rule_counter.items(), key=lambda x: x[1], reverse=True)[:10]
+            df_rules = pd.DataFrame(top_rules, columns=["Regla", "Activaciones"])
+            st.caption("Reglas más frecuentes")
+            st.dataframe(df_rules.set_index("Regla"), use_container_width=True)
+
+    with st.expander("Lista de casos", expanded=False):
+        df_cases = pd.DataFrame([
+            {
+                "Fecha": r["created_at"][:10] if r.get("created_at") else "—",
+                "Asunto": (r.get("subject") or "—")[:60],
+                "Remitente": r.get("sender", "—"),
+                "Riesgo": (r["risk_level"] or "unknown").upper(),
+                "Score": r["risk_score"],
+                "Reglas": len(r.get("triggered_rules", [])),
+            }
+            for r in rows
+        ])
+        st.dataframe(df_cases, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+
 # ── Tab 2: Phishing Investigation ────────────────────────────────────────────
 
 
@@ -1429,6 +1730,8 @@ def render_phishing_tab(settings: dict[str, Any]) -> None:
         "El pipeline corre el basic assessment y, opcionalmente, el pipeline "
         "multi-agente de CAI para producir un veredicto completo."
     )
+
+    _render_phishing_dashboard(settings)
 
     input_mode = st.radio(
         "Modo de entrada",
@@ -1882,6 +2185,106 @@ def _run_imap_monitor(
                     st.caption(verdict_data["evidence_summary"])
 
 
+# ── Tab: CAI Terminal ─────────────────────────────────────────────────────────
+
+
+def render_cai_terminal_tab(settings: dict[str, Any]) -> None:
+    st.header("Asistente CAI")
+    st.caption(
+        "Chat libre con el agente de análisis. Puede consultar casos, "
+        "correr queries sobre workspaces activos, y responder preguntas de ciberseguridad."
+    )
+
+    if not _CAI_AVAILABLE:
+        st.info(
+            "Instala `cai-platform-ui[cai]` (ejecuta `make install-ui-cai`) "
+            "para habilitar el asistente."
+        )
+        return
+
+    # Optionally inject active WatchGuard investigation context
+    wg_run_id = st.session_state.get("wg_run_id")
+    wg_staging = st.session_state.get("wg_staging_artifact_id")
+
+    use_wg_context = False
+    if wg_run_id and wg_staging:
+        wg_workspace = st.session_state.get("wg_workspace_id", wg_run_id[:16])
+        use_wg_context = st.checkbox(
+            f"Usar contexto de investigación activa (workspace: `{wg_workspace}`)",
+            value=True,
+            key="term_use_wg_context",
+        )
+
+    col_clear, _ = st.columns([1, 4])
+    if col_clear.button("Limpiar conversación", key="term_clear"):
+        st.session_state.pop("term_chat_history", None)
+        st.session_state.pop("term_chat_raw_history", None)
+        st.rerun()
+
+    for msg in st.session_state.get("term_chat_history", []):
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
+
+    user_input = st.chat_input("Pregunta al asistente CAI...", key="term_chat_input")
+    if user_input:
+        _handle_terminal_chat_turn(
+            settings,
+            user_input,
+            wg_run_id=wg_run_id if use_wg_context else None,
+            wg_staging_artifact_id=wg_staging if use_wg_context else None,
+        )
+
+
+def _handle_terminal_chat_turn(
+    settings: dict[str, Any],
+    user_input: str,
+    wg_run_id: str | None = None,
+    wg_staging_artifact_id: str | None = None,
+) -> None:
+    if "term_chat_history" not in st.session_state:
+        st.session_state["term_chat_history"] = []
+
+    raw_history = st.session_state.get("term_chat_raw_history")
+
+    st.session_state["term_chat_history"].append({"role": "user", "content": user_input})
+    with st.chat_message("user"):
+        st.write(user_input)
+
+    if raw_history is None:
+        if wg_run_id and wg_staging_artifact_id:
+            cai_input = (
+                f"You are helping investigate a WatchGuard log workspace. "
+                f"The run_id is {wg_run_id!r} and the staging manifest artifact_id is "
+                f"{wg_staging_artifact_id!r}. Always pass input_artifact_id={wg_staging_artifact_id!r} "
+                f"to duckdb analytics and query tools. User question: {user_input}"
+            )
+        else:
+            cai_input = user_input
+    else:
+        cai_input = raw_history + [{"role": "user", "content": user_input}]
+
+    agent = build_egs_analist_agent(
+        platform_api_base_url=settings["api_url"],
+        model=settings["model"],
+    )
+
+    with st.chat_message("assistant"):
+        with st.spinner("El asistente está pensando..."):
+            try:
+                result = run_cai_agent(agent, cai_input)
+            except Exception as exc:
+                st.error(f"Error del agente CAI: {exc}")
+                return
+
+        response_text = _format_cai_output(result.final_output)
+        st.write(response_text)
+
+    st.session_state["term_chat_history"].append(
+        {"role": "assistant", "content": response_text}
+    )
+    st.session_state["term_chat_raw_history"] = result.to_input_list()
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 
@@ -1895,12 +2298,13 @@ def main() -> None:
 
     settings = render_sidebar()
 
-    tab_wg, tab_ws, tab_ph, tab_imap, tab_hist = st.tabs([
+    tab_wg, tab_ws, tab_ph, tab_imap, tab_hist, tab_term = st.tabs([
         "WatchGuard S3 Investigation",
         "Workspace Browser",
         "Phishing Investigation",
         "Monitor de Email",
         "Historial de Casos",
+        "Asistente CAI",
     ])
 
     with tab_wg:
@@ -1917,6 +2321,9 @@ def main() -> None:
 
     with tab_hist:
         render_case_history_tab(settings)
+
+    with tab_term:
+        render_cai_terminal_tab(settings)
 
 
 if __name__ == "__main__":
