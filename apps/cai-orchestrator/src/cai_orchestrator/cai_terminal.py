@@ -715,13 +715,14 @@ async def run_cai_terminal_session(
     prompt: str | None = None,
     session: SyncHttpSession | None = None,
     model: str | None = None,
+    group_id: str | None = None,
 ) -> int:
     """Run a tiny CAI terminal session against the new platform-api boundary."""
     resolved = settings or load_cai_integration_settings()
     _validate_supported_agent_type(resolved.cai_agent_type)
 
     try:
-        from cai.sdk.agents import Runner, set_default_openai_api, set_tracing_disabled
+        from cai.sdk.agents import Runner, RunConfig, set_default_openai_api, set_tracing_disabled
     except ImportError as exc:
         raise MissingCaiDependencyError(
             "CAI is not installed. Install the optional 'cai' extra to run the CAI terminal session."
@@ -736,8 +737,27 @@ async def run_cai_terminal_session(
     agent = build_agent_from_settings(resolved, session=session, model=model)
     set_tracing_disabled(True)
 
+    run_config = RunConfig(
+        workflow_name="platform-terminal",
+        group_id=group_id,
+        trace_include_sensitive_data=False,
+    )
+
+    try:
+        from cai.sdk.agents.exceptions import InputGuardrailTripwireTriggered
+    except ImportError:
+        InputGuardrailTripwireTriggered = None  # type: ignore[assignment,misc]
+
     if prompt is not None:
-        result = await Runner.run(agent, input=prompt)
+        try:
+            result = await Runner.run(agent, input=prompt, run_config=run_config)
+        except Exception as exc:
+            if InputGuardrailTripwireTriggered is not None and isinstance(exc, InputGuardrailTripwireTriggered):
+                import sys
+                print(json.dumps({"error": {"type": "input_guardrail_triggered", "message": str(exc)}},
+                                 indent=2), file=sys.stderr)
+                return 1
+            raise
         print(_format_final_output(result.final_output))
         return 0
 
@@ -761,7 +781,15 @@ async def run_cai_terminal_session(
         else:
             run_input = user_input
 
-        result = await Runner.run(agent, input=run_input)
+        try:
+            result = await Runner.run(agent, input=run_input, run_config=run_config)
+        except Exception as exc:
+            if InputGuardrailTripwireTriggered is not None and isinstance(exc, InputGuardrailTripwireTriggered):
+                import sys
+                print(json.dumps({"error": {"type": "input_guardrail_triggered", "message": str(exc)}},
+                                 indent=2), file=sys.stderr)
+                continue
+            raise
         print(_format_final_output(result.final_output))
         conversation_input = result.to_input_list()
 
@@ -772,6 +800,7 @@ def run_cai_terminal(
     prompt: str | None = None,
     session: SyncHttpSession | None = None,
     model: str | None = None,
+    group_id: str | None = None,
 ) -> int:
     """Sync wrapper for the minimal CAI terminal loop."""
     return asyncio.run(
@@ -780,6 +809,7 @@ def run_cai_terminal(
             prompt=prompt,
             session=session,
             model=model,
+            group_id=group_id,
         )
     )
 

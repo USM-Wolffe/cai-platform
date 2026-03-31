@@ -18,6 +18,11 @@ from platform_backends.phishing_email import (
     execute_predefined_observation as _execute_phishing_email,
     get_phishing_email_backend_descriptor,
 )
+from platform_backends.multi_source_logs import (
+    MULTI_SOURCE_LOGS_BACKEND_ID,
+    execute_predefined_observation as _execute_multi_source_logs,
+    get_multi_source_logs_backend_descriptor,
+)
 from platform_backends.watchguard_logs import (
     WATCHGUARD_LOGS_BACKEND_ID,
     execute_predefined_observation as _execute_watchguard_logs,
@@ -355,6 +360,13 @@ class AppRuntime:
                 input_payload=input_payload,
                 observation_request=observation_request,
             )
+        if backend_id == MULTI_SOURCE_LOGS_BACKEND_ID:
+            return _execute_multi_source_logs(
+                run=run,
+                input_artifact=input_artifact,
+                input_payload=input_payload,
+                observation_request=observation_request,
+            )
         raise NotFoundError(f"no executor registered for backend '{backend_id}'")
 
     def publish_query_artifacts(self, *, case: Case, run: Run, artifacts: list[Artifact]) -> tuple[Case, Run]:
@@ -387,6 +399,7 @@ def build_default_runtime() -> AppRuntime:
             [
                 get_watchguard_logs_backend_descriptor(),
                 get_phishing_email_backend_descriptor(),
+                get_multi_source_logs_backend_descriptor(),
             ]
         ),
         approval_policy=DevelopmentApprovalPolicy(),

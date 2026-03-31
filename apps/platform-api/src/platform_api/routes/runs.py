@@ -14,6 +14,15 @@ from platform_api.schemas import (
     serialize_run_summary,
     serialize_run_status,
 )
+from platform_backends.multi_source_logs import (
+    MULTI_SOURCE_LOGS_BACKEND_ID,
+    MULTI_SOURCE_LOGS_CROSS_SOURCE_OPERATION,
+    MULTI_SOURCE_LOGS_DNS_ANOMALY_OPERATION,
+    MULTI_SOURCE_LOGS_FAILED_AUTH_OPERATION,
+    MULTI_SOURCE_LOGS_LATERAL_MOVEMENT_OPERATION,
+    MULTI_SOURCE_LOGS_NORMALIZE_OPERATION,
+    MULTI_SOURCE_LOGS_PRIV_ESC_OPERATION,
+)
 from platform_backends.phishing_email import (
     PHISHING_EMAIL_BACKEND_ID,
     PHISHING_EMAIL_BASIC_ASSESSMENT_OPERATION,
@@ -331,6 +340,96 @@ def execute_phishing_email_basic_assessment_endpoint(
         runtime=runtime,
         backend_id=PHISHING_EMAIL_BACKEND_ID,
         operation_kind=PHISHING_EMAIL_BASIC_ASSESSMENT_OPERATION,
+    )
+
+
+@router.post("/{run_id}/observations/multi-source-logs-normalize", response_model=None)
+def execute_multi_source_logs_normalize_endpoint(
+    run_id: str,
+    request: ExecuteObservationRequest = Body(default_factory=ExecuteObservationRequest),
+    runtime: AppRuntime = Depends(get_runtime),
+) -> object:
+    return _run_observation(
+        run_id=run_id,
+        request_body=request,
+        runtime=runtime,
+        backend_id=MULTI_SOURCE_LOGS_BACKEND_ID,
+        operation_kind=MULTI_SOURCE_LOGS_NORMALIZE_OPERATION,
+    )
+
+
+@router.post("/{run_id}/observations/multi-source-logs-failed-auth-detect", response_model=None)
+def execute_multi_source_logs_failed_auth_detect_endpoint(
+    run_id: str,
+    request: ExecuteObservationRequest = Body(default_factory=ExecuteObservationRequest),
+    runtime: AppRuntime = Depends(get_runtime),
+) -> object:
+    return _run_observation(
+        run_id=run_id,
+        request_body=request,
+        runtime=runtime,
+        backend_id=MULTI_SOURCE_LOGS_BACKEND_ID,
+        operation_kind=MULTI_SOURCE_LOGS_FAILED_AUTH_OPERATION,
+    )
+
+
+@router.post("/{run_id}/observations/multi-source-logs-lateral-movement-detect", response_model=None)
+def execute_multi_source_logs_lateral_movement_detect_endpoint(
+    run_id: str,
+    request: ExecuteObservationRequest = Body(default_factory=ExecuteObservationRequest),
+    runtime: AppRuntime = Depends(get_runtime),
+) -> object:
+    return _run_observation(
+        run_id=run_id,
+        request_body=request,
+        runtime=runtime,
+        backend_id=MULTI_SOURCE_LOGS_BACKEND_ID,
+        operation_kind=MULTI_SOURCE_LOGS_LATERAL_MOVEMENT_OPERATION,
+    )
+
+
+@router.post("/{run_id}/observations/multi-source-logs-privilege-escalation-detect", response_model=None)
+def execute_multi_source_logs_privilege_escalation_detect_endpoint(
+    run_id: str,
+    request: ExecuteObservationRequest = Body(default_factory=ExecuteObservationRequest),
+    runtime: AppRuntime = Depends(get_runtime),
+) -> object:
+    return _run_observation(
+        run_id=run_id,
+        request_body=request,
+        runtime=runtime,
+        backend_id=MULTI_SOURCE_LOGS_BACKEND_ID,
+        operation_kind=MULTI_SOURCE_LOGS_PRIV_ESC_OPERATION,
+    )
+
+
+@router.post("/{run_id}/observations/multi-source-logs-dns-anomaly-detect", response_model=None)
+def execute_multi_source_logs_dns_anomaly_detect_endpoint(
+    run_id: str,
+    request: ExecuteObservationRequest = Body(default_factory=ExecuteObservationRequest),
+    runtime: AppRuntime = Depends(get_runtime),
+) -> object:
+    return _run_observation(
+        run_id=run_id,
+        request_body=request,
+        runtime=runtime,
+        backend_id=MULTI_SOURCE_LOGS_BACKEND_ID,
+        operation_kind=MULTI_SOURCE_LOGS_DNS_ANOMALY_OPERATION,
+    )
+
+
+@router.post("/{run_id}/observations/multi-source-logs-cross-source-correlate", response_model=None)
+def execute_multi_source_logs_cross_source_correlate_endpoint(
+    run_id: str,
+    request: ExecuteObservationRequest = Body(default_factory=ExecuteObservationRequest),
+    runtime: AppRuntime = Depends(get_runtime),
+) -> object:
+    return _run_observation(
+        run_id=run_id,
+        request_body=request,
+        runtime=runtime,
+        backend_id=MULTI_SOURCE_LOGS_BACKEND_ID,
+        operation_kind=MULTI_SOURCE_LOGS_CROSS_SOURCE_OPERATION,
     )
 
 

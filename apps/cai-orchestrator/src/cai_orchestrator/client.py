@@ -428,6 +428,78 @@ class PlatformApiClient:
             json=payload,
         )
 
+    def execute_multi_source_logs_normalize(
+        self,
+        *,
+        run_id: str,
+        requested_by: str,
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"requested_by": requested_by}
+        if input_artifact_id is not None:
+            payload["input_artifact_id"] = input_artifact_id
+        return self._request("POST", f"/runs/{run_id}/observations/multi-source-logs-normalize", json=payload)
+
+    def execute_multi_source_logs_failed_auth_detect(
+        self,
+        *,
+        run_id: str,
+        requested_by: str,
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"requested_by": requested_by}
+        if input_artifact_id is not None:
+            payload["input_artifact_id"] = input_artifact_id
+        return self._request("POST", f"/runs/{run_id}/observations/multi-source-logs-failed-auth-detect", json=payload)
+
+    def execute_multi_source_logs_lateral_movement_detect(
+        self,
+        *,
+        run_id: str,
+        requested_by: str,
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"requested_by": requested_by}
+        if input_artifact_id is not None:
+            payload["input_artifact_id"] = input_artifact_id
+        return self._request("POST", f"/runs/{run_id}/observations/multi-source-logs-lateral-movement-detect", json=payload)
+
+    def execute_multi_source_logs_privilege_escalation_detect(
+        self,
+        *,
+        run_id: str,
+        requested_by: str,
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"requested_by": requested_by}
+        if input_artifact_id is not None:
+            payload["input_artifact_id"] = input_artifact_id
+        return self._request("POST", f"/runs/{run_id}/observations/multi-source-logs-privilege-escalation-detect", json=payload)
+
+    def execute_multi_source_logs_dns_anomaly_detect(
+        self,
+        *,
+        run_id: str,
+        requested_by: str,
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"requested_by": requested_by}
+        if input_artifact_id is not None:
+            payload["input_artifact_id"] = input_artifact_id
+        return self._request("POST", f"/runs/{run_id}/observations/multi-source-logs-dns-anomaly-detect", json=payload)
+
+    def execute_multi_source_logs_cross_source_correlate(
+        self,
+        *,
+        run_id: str,
+        requested_by: str,
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"requested_by": requested_by}
+        if input_artifact_id is not None:
+            payload["input_artifact_id"] = input_artifact_id
+        return self._request("POST", f"/runs/{run_id}/observations/multi-source-logs-cross-source-correlate", json=payload)
+
     def list_cases(self, *, client_id: str) -> dict[str, Any]:
         return self._request("GET", f"/cases?client_id={client_id}")
 

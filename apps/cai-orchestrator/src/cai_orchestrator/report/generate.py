@@ -249,7 +249,7 @@ def _build_context(
         "cai_pipeline_duration": _cai_pipeline_duration(stage_progress),
         "cai_stages_completed": len([s for s in stage_progress if s.get("status") == "completed"]),
         "cai_evidence_count": len(case_data.get("evidence_items", [])),
-        "cai_agents": ["ddos-orchestrator", "ddos-data-collector", "ddos-ip-profiler", "ddos-synthesizer"],
+        "cai_agents": ["ddos-orchestrator", "ddos-processor", "ddos-ip-profiler", "ddos-synthesizer"],
 
         # Timeline (last 10 entries for display)
         "timeline": [

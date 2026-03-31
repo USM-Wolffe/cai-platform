@@ -43,7 +43,7 @@ def test_health_endpoint_works():
     assert response.status_code == 200
     assert response.json() == {
         "status": "ok",
-        "backend_ids": ["phishing_email", "watchguard_logs"],
+        "backend_ids": ["multi_source_logs", "phishing_email", "watchguard_logs"],
     }
 
 

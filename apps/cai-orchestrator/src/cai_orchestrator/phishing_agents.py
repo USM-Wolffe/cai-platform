@@ -32,10 +32,21 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import BaseModel
+
 from cai_orchestrator.cai_terminal import _resolve_model
 from cai_orchestrator.cai_tools import PlatformApiToolService
 from cai_orchestrator.client import PlatformApiClient, SyncHttpSession
 from cai_orchestrator.errors import MissingCaiDependencyError
+
+
+class PhishingVerdict(BaseModel):
+    overall_verdict: str     # 'phishing'|'likely_phishing'|'suspicious'|'benign'
+    risk_level: str          # 'high'|'medium'|'low'|'none'
+    confidence: str          # 'high'|'medium'|'low'
+    triggered_rules: list[str]
+    recommended_action: str  # 'delete'|'quarantine'|'escalate'|'no_action'
+    evidence_summary: str    # human-readable paragraph with SPF/DKIM/URL/attachment findings
 
 
 def build_phishing_investigator_agent(
@@ -51,6 +62,12 @@ def build_phishing_investigator_agent(
         raise MissingCaiDependencyError(
             "CAI is not installed. Install the optional 'cai' extra to use the phishing investigator."
         ) from exc
+
+    try:
+        from cai.guardrails import get_security_guardrails
+        input_guardrails, _ = get_security_guardrails()
+    except (ImportError, Exception):
+        input_guardrails = []
 
     client = PlatformApiClient(base_url=platform_api_base_url, session=session)
     service = PlatformApiToolService(platform_api_client=client)
@@ -117,21 +134,19 @@ def build_phishing_investigator_agent(
             "1. Call list_run_artifacts to discover all artifacts for the run.\n"
             "2. Call read_artifact_content on each output artifact (basic_assessment, "
             "   header_analysis if present, etc.) to gather all evidence.\n"
-            "3. Produce a single structured JSON verdict with exactly these fields:\n"
+            "3. Populate every field of the PhishingVerdict output model:\n"
             "   overall_verdict: 'phishing' | 'likely_phishing' | 'suspicious' | 'benign'\n"
             "   risk_level: 'high' | 'medium' | 'low' | 'none'\n"
             "   confidence: 'high' | 'medium' | 'low'\n"
             "   triggered_rules: list of rule_ids that fired across all analyses\n"
-            "   authentication_summary: dict with spf/dkim/dmarc values (or null if not analyzed)\n"
-            "   url_summary: dict with suspicious_url_count and sample reasons\n"
-            "   attachment_summary: dict with suspicious_attachment_count and mime_mismatch flag\n"
             "   recommended_action: 'delete' | 'quarantine' | 'escalate' | 'no_action'\n"
-            "   evidence_summary: one-paragraph human-readable summary of findings\n\n"
-            "Respond with ONLY the JSON verdict object — no preamble, no markdown fences, "
-            "no explanation. Just the raw JSON."
+            "   evidence_summary: one-paragraph human-readable summary covering authentication "
+            "   (SPF/DKIM/DMARC), URLs, attachments, and any other signals found\n\n"
+            "Do not output free text — populate the structured output model and stop."
         ),
         tools=[list_run_artifacts, read_artifact_content, get_run],
         handoffs=[],
+        output_type=PhishingVerdict,
         model=_resolve_model(model),
     )
 
@@ -210,6 +225,7 @@ def build_phishing_investigator_agent(
     triage = Agent(
         name="phishing-triage",
         description="Entry point of the phishing investigator — runs basic assessment and delegates to specialists.",
+        input_guardrails=input_guardrails,
         instructions=(
             "You are the triage agent for the phishing investigation pipeline.\n\n"
             "You ONLY work with existing runs — you do NOT create cases, artifacts, or runs. "

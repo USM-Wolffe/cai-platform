@@ -35,10 +35,26 @@ import json as _json
 import re
 from typing import Any
 
+from pydantic import BaseModel
+
 from cai_orchestrator.cai_terminal import _resolve_model
 from cai_orchestrator.cai_tools import PlatformApiToolService
 from cai_orchestrator.client import PlatformApiClient, SyncHttpSession
 from cai_orchestrator.errors import MissingCaiDependencyError
+
+
+class DDoSSynthesisOutput(BaseModel):
+    nist_case_id: str
+    incident_type: str          # 'volumetric_ddos'|'application_ddos'|'mixed'
+    severity: str               # 'critical'|'high'|'medium'|'low'
+    confidence: float
+    peak_date: str
+    top_source_ip: str
+    dominant_protocol: str
+    containment_decision: str   # 'block'|'monitor'|'investigate_further'
+    containment_rationale: str
+    nist_stage_reached: str
+    evidence_summary: str
 
 
 def _parse_setup_complete(text: str) -> tuple[str, str, str]:
@@ -92,7 +108,7 @@ def _run_ddos_collection(
 
     # 1. Temporal analysis
     r = client.execute_watchguard_ddos_temporal_analysis(
-        run_id=run_id, requested_by="ddos_collector", input_artifact_id=staging_artifact_id
+        run_id=run_id, requested_by="ddos_pipeline", input_artifact_id=staging_artifact_id
     )
     temporal_artifact_id = _aid(r)
     ss = _ss(r)
@@ -108,7 +124,7 @@ def _run_ddos_collection(
 
     # 2. Top sources
     r = client.execute_watchguard_ddos_top_sources(
-        run_id=run_id, requested_by="ddos_collector", input_artifact_id=staging_artifact_id
+        run_id=run_id, requested_by="ddos_pipeline", input_artifact_id=staging_artifact_id
     )
     sources_artifact_id = _aid(r)
     ss = _ss(r)
@@ -126,7 +142,7 @@ def _run_ddos_collection(
 
     # 3. Top destinations
     r = client.execute_watchguard_ddos_top_destinations(
-        run_id=run_id, requested_by="ddos_collector", input_artifact_id=staging_artifact_id
+        run_id=run_id, requested_by="ddos_pipeline", input_artifact_id=staging_artifact_id
     )
     destinations_artifact_id = _aid(r)
     ss = _ss(r)
@@ -140,7 +156,7 @@ def _run_ddos_collection(
 
     # 4. Protocol breakdown
     r = client.execute_watchguard_ddos_protocol_breakdown(
-        run_id=run_id, requested_by="ddos_collector", input_artifact_id=staging_artifact_id
+        run_id=run_id, requested_by="ddos_pipeline", input_artifact_id=staging_artifact_id
     )
     protocol_artifact_id = _aid(r)
     ss = _ss(r)
@@ -173,7 +189,7 @@ def _run_ddos_collection(
     r = client.execute_watchguard_ddos_segment_analysis(
         run_id=run_id,
         segment=top_segment,
-        requested_by="ddos_collector",
+        requested_by="ddos_pipeline",
         input_artifact_id=staging_artifact_id,
     )
     segment_artifact_id = _aid(r)
@@ -193,7 +209,7 @@ def _run_ddos_collection(
     r = client.execute_watchguard_ddos_ip_profile(
         run_id=run_id,
         ip=top_ip,
-        requested_by="ddos_collector",
+        requested_by="ddos_pipeline",
         input_artifact_id=staging_artifact_id,
     )
     ip_artifact_id = _aid(r)
@@ -213,7 +229,7 @@ def _run_ddos_collection(
     r = client.execute_watchguard_ddos_hourly_distribution(
         run_id=run_id,
         date=peak_date,
-        requested_by="ddos_collector",
+        requested_by="ddos_pipeline",
         input_artifact_id=staging_artifact_id,
     )
     hourly_artifact_id = _aid(r)
@@ -309,7 +325,7 @@ def build_ddos_investigator_agent(
         platform_run_id: str,
     ) -> str:
         """Persist staging IDs into the NIST case so downstream agents can retrieve them.
-        Call this BEFORE handing off to ddos-data-collector."""
+        Call this BEFORE handing off to ddos-processor."""
         state = _get_store().load(nist_case_id)
         if state is None:
             return _json.dumps({"error": f"NIST case {nist_case_id} not found in store."})
@@ -326,7 +342,7 @@ def build_ddos_investigator_agent(
     @function_tool
     def get_staging_info(nist_case_id: str) -> str:
         """Retrieve staging_artifact_id and platform_run_id for a NIST case.
-        Call this at the VERY START of ddos-data-collector and ddos-ip-profiler."""
+        Call this at the VERY START of ddos-processor and ddos-ip-profiler."""
         state = _get_store().load(nist_case_id)
         if state is None:
             return _json.dumps({"error": f"NIST case {nist_case_id} not found in store."})
@@ -562,12 +578,12 @@ def build_ddos_investigator_agent(
             input_artifact_id=input_artifact_id,
         )
 
-    # ── collector tools ─────────────────────────────────────────────────────
+    # ── pipeline tools ──────────────────────────────────────────────────────
 
     @function_tool(strict_mode=False)
     def execute_watchguard_ddos_temporal_analysis(
         run_id: str,
-        requested_by: str = "ddos_collector",
+        requested_by: str = "ddos_pipeline",
         input_artifact_id: str | None = None,
     ) -> dict[str, Any]:
         """Analyze daily event counts. Returns peak_day, events_per_day, pct_variation.
@@ -581,7 +597,7 @@ def build_ddos_investigator_agent(
     @function_tool(strict_mode=False)
     def execute_watchguard_ddos_top_sources(
         run_id: str,
-        requested_by: str = "ddos_collector",
+        requested_by: str = "ddos_pipeline",
         input_artifact_id: str | None = None,
     ) -> dict[str, Any]:
         """Identify top source IPs and /16 segments by event count.
@@ -595,7 +611,7 @@ def build_ddos_investigator_agent(
     @function_tool(strict_mode=False)
     def execute_watchguard_ddos_top_destinations(
         run_id: str,
-        requested_by: str = "ddos_collector",
+        requested_by: str = "ddos_pipeline",
         input_artifact_id: str | None = None,
     ) -> dict[str, Any]:
         """Identify top destination IPs targeted in the attack.
@@ -659,7 +675,7 @@ def build_ddos_investigator_agent(
     @function_tool(strict_mode=False)
     def execute_watchguard_ddos_protocol_breakdown(
         run_id: str,
-        requested_by: str = "ddos_collector",
+        requested_by: str = "ddos_pipeline",
         input_artifact_id: str | None = None,
     ) -> dict[str, Any]:
         """Analyze protocol distribution across all traffic (TCP/UDP/ICMP/etc).
@@ -695,7 +711,7 @@ def build_ddos_investigator_agent(
             ")\n\n"
             "STEP 3: case_advance_stage(case_id=<nist_case_id>)\n\n"
             "STEP 4: case_build_final_output(case_id=<nist_case_id>)\n"
-            "  → print the full JSON result as your final response.\n\n"
+            "  → use the result to populate all fields of the DDoSSynthesisOutput model.\n\n"
             "Do NOT hand off to anyone. Do NOT call any DDoS observation tools."
         ),
         tools=[
@@ -707,6 +723,7 @@ def build_ddos_investigator_agent(
             case_build_final_output,
         ],
         handoffs=[],
+        output_type=DDoSSynthesisOutput,
         model=_resolve_model(model),
     )
 
@@ -714,11 +731,11 @@ def build_ddos_investigator_agent(
         name="ddos-orchestrator",
         description=(
             "Entry point for DDoS investigations. Sets up the platform-api case and run, "
-            "stages the workspace ZIP, initialises the NIST CaseState, and dispatches to the data-collector."
+            "stages the workspace ZIP, initialises the NIST CaseState, and dispatches to the ddos-processor."
         ),
         instructions=(
             "You are the DDoS investigation orchestrator. Given a workspace_id (or an S3 URI), "
-            "set up the investigation and dispatch to ddos-data-collector.\n\n"
+            "set up the investigation and dispatch to ddos-processor.\n\n"
             "## Setup flow — execute in order, do not skip steps:\n\n"
             "STEP 1: find_latest_workspace_upload(workspace_id=<id>) → note s3_uri.\n"
             "  (If the user provided an s3_uri directly, skip this step.)\n\n"
@@ -739,7 +756,7 @@ def build_ddos_investigator_agent(
             "  staging_artifact_id=<staging_artifact_id from step 5>,\n"
             "  platform_run_id=<run_id from step 4>,\n"
             "  observed_signals=['volumetric ddos', 'traffic flood']\n"
-            "  (The data-collector will enrich observed_signals after running protocol breakdown.)\n"
+            "  (The ddos-processor will enrich observed_signals after running protocol breakdown.)\n"
             "  ) → note the case_id from this response (field 'case_id'; "
             "this is the NIST case_id, different from the platform case_id in step 2).\n\n"
             "## Output\n"
@@ -800,10 +817,17 @@ async def run_ddos_investigation(
             _return_synthesizer=True,
         )
 
+        from cai.sdk.agents import RunConfig
+
         # Phase 1: Setup
         orch_result = await Runner.run(
             orchestrator,
             input=f"Investigate DDoS workspace_id={workspace_id}",
+            run_config=RunConfig(
+                workflow_name="ddos-investigation",
+                group_id=workspace_id,
+                trace_include_sensitive_data=False,
+            ),
         )
         nist_case_id, run_id, staging_artifact_id = _parse_setup_complete(
             orch_result.final_output
@@ -821,6 +845,11 @@ async def run_ddos_investigation(
         synth_result = await Runner.run(
             synthesizer,
             input=f"nist_case_id={nist_case_id} summary={_json.dumps(summary)}",
+            run_config=RunConfig(
+                workflow_name="ddos-synthesis",
+                group_id=nist_case_id,
+                trace_include_sensitive_data=False,
+            ),
         )
         return synth_result.final_output
     finally:

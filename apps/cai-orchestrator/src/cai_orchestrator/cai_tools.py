@@ -360,6 +360,84 @@ class PlatformApiToolService:
             input_artifact_id=input_artifact_id,
         )
 
+    def execute_multi_source_logs_normalize(
+        self,
+        *,
+        run_id: str,
+        requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.platform_api_client.execute_multi_source_logs_normalize(
+            run_id=run_id,
+            requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
+        )
+
+    def execute_multi_source_logs_failed_auth_detect(
+        self,
+        *,
+        run_id: str,
+        requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.platform_api_client.execute_multi_source_logs_failed_auth_detect(
+            run_id=run_id,
+            requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
+        )
+
+    def execute_multi_source_logs_lateral_movement_detect(
+        self,
+        *,
+        run_id: str,
+        requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.platform_api_client.execute_multi_source_logs_lateral_movement_detect(
+            run_id=run_id,
+            requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
+        )
+
+    def execute_multi_source_logs_privilege_escalation_detect(
+        self,
+        *,
+        run_id: str,
+        requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.platform_api_client.execute_multi_source_logs_privilege_escalation_detect(
+            run_id=run_id,
+            requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
+        )
+
+    def execute_multi_source_logs_dns_anomaly_detect(
+        self,
+        *,
+        run_id: str,
+        requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.platform_api_client.execute_multi_source_logs_dns_anomaly_detect(
+            run_id=run_id,
+            requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
+        )
+
+    def execute_multi_source_logs_cross_source_correlate(
+        self,
+        *,
+        run_id: str,
+        requested_by: str = "cai_terminal",
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.platform_api_client.execute_multi_source_logs_cross_source_correlate(
+            run_id=run_id,
+            requested_by=requested_by,
+            input_artifact_id=input_artifact_id,
+        )
+
     def execute_watchguard_guarded_custom_query(
         self,
         *,

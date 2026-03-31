@@ -208,6 +208,12 @@ def run_cli(argv: list[str] | None = None) -> int:
     if args.command == "run-ddos-investigate":
         return _run_ddos_investigate_command(args)
 
+    if args.command == "run-blueteam-investigate":
+        return _run_blueteam_investigate_command(args)
+
+    if args.command == "run-log-monitor":
+        return _run_log_monitor_command(args)
+
     if args.command == "run-phishing-monitor":
         return _run_phishing_monitor_command(args)
 
@@ -392,6 +398,125 @@ def _run_ddos_investigate_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_blueteam_investigate_command(args: argparse.Namespace) -> int:
+    """Handle the run-blueteam-investigate CLI command (hybrid pipeline)."""
+    import asyncio
+
+    from cai_orchestrator.blueteam_agents import run_blueteam_investigation
+
+    settings = load_cai_integration_settings()
+    api_base_url = args.api_base_url or settings.platform_api_base_url
+    model = getattr(args, "model", None) or settings.cai_model
+    try:
+        result = asyncio.run(
+            run_blueteam_investigation(
+                s3_uri=args.s3_uri,
+                source_type=args.source_type,
+                client_id=args.client_id,
+                platform_api_base_url=api_base_url,
+                model=model,
+            )
+        )
+    except MissingCaiDependencyError as exc:
+        _print_error({"error": {"type": "missing_cai_dependency", "message": str(exc)}})
+        return 1
+    except ValueError as exc:
+        _print_error({"error": {"type": "pipeline_setup_failed", "message": str(exc)}})
+        return 1
+    except Exception as exc:  # noqa: BLE001
+        from cai_orchestrator.errors import PlatformApiRequestError, PlatformApiUnavailableError
+
+        if isinstance(exc, PlatformApiUnavailableError):
+            _print_error({"error": {"type": "platform_api_unavailable", "message": str(exc)}})
+        elif isinstance(exc, PlatformApiRequestError):
+            _print_error({"error": {"type": "platform_api_request_failed", "message": str(exc)}})
+        else:
+            raise
+        return 1
+
+    if hasattr(result, "model_dump"):
+        print(json.dumps(result.model_dump(), indent=2, sort_keys=True))
+    else:
+        print(result)
+    return 0
+
+
+def _run_log_monitor_command(args: argparse.Namespace) -> int:
+    """Handle the run-log-monitor CLI command (S3 polling loop)."""
+    import asyncio
+    import os
+    import time
+
+    from cai_orchestrator.blueteam_agents import run_blueteam_investigation
+    from cai_orchestrator.log_monitor import (
+        LogMonitorConfigError,
+        LogMonitorSettings,
+        poll_new_log_files,
+    )
+
+    settings = load_cai_integration_settings()
+    api_base_url = args.api_base_url or settings.platform_api_base_url
+    model = getattr(args, "model", None) or settings.cai_model
+
+    # Build settings from CLI args, falling back to env vars
+    if args.s3_bucket:
+        os.environ["LOG_MONITOR_S3_BUCKET"] = args.s3_bucket
+    if args.s3_prefix:
+        os.environ["LOG_MONITOR_S3_PREFIX"] = args.s3_prefix
+    os.environ["LOG_MONITOR_SOURCE_TYPE"] = args.source_type
+    if args.interval:
+        os.environ["LOG_MONITOR_POLL_INTERVAL"] = str(args.interval)
+
+    try:
+        from cai_orchestrator.log_monitor import load_log_monitor_settings
+        monitor_settings = load_log_monitor_settings()
+    except LogMonitorConfigError as exc:
+        _print_error({"error": {"type": "log_monitor_config_error", "message": str(exc)}})
+        return 1
+
+    run_once = getattr(args, "once", False)
+
+    while True:
+        try:
+            new_files = poll_new_log_files(monitor_settings)
+        except Exception as exc:
+            _print_error({"error": {"type": "poll_failed", "message": str(exc)}})
+            if run_once:
+                return 1
+            time.sleep(monitor_settings.poll_interval)
+            continue
+
+        if not new_files:
+            print(json.dumps({"status": "no_new_files"}))
+        else:
+            for log_ref in new_files:
+                print(json.dumps({"status": "processing", "s3_uri": log_ref.s3_uri}))
+                try:
+                    result = asyncio.run(
+                        run_blueteam_investigation(
+                            s3_uri=log_ref.s3_uri,
+                            source_type=log_ref.source_type,
+                            client_id=args.client_id,
+                            platform_api_base_url=api_base_url,
+                            model=model,
+                        )
+                    )
+                    if hasattr(result, "model_dump"):
+                        print(json.dumps(result.model_dump(), indent=2, sort_keys=True))
+                    else:
+                        print(result)
+                except MissingCaiDependencyError as exc:
+                    _print_error({"error": {"type": "missing_cai_dependency", "message": str(exc)}})
+                    if run_once:
+                        return 1
+                except Exception as exc:  # noqa: BLE001
+                    _print_error({"error": {"type": "investigation_failed", "s3_uri": log_ref.s3_uri, "message": str(exc)}})
+
+        if run_once:
+            return 0
+        time.sleep(monitor_settings.poll_interval)
+
+
 def _run_phishing_investigate_command(args: argparse.Namespace) -> int:
     """Handle the run-phishing-investigate CLI command."""
     from dataclasses import replace as dc_replace
@@ -540,7 +665,7 @@ def _run_phishing_monitor_command(args: argparse.Namespace) -> int:
                             cai_model=cai_model or cai_settings.cai_model,
                         )
                         prompt = f"Investigate run_id={run_id}, input_artifact_id={artifact_id}."
-                        run_cai_terminal(settings=cai_settings, prompt=prompt)
+                        run_cai_terminal(settings=cai_settings, prompt=prompt, group_id=run_id)
                     except Exception as exc:
                         results[-1]["cai_investigation_error"] = str(exc)
 
@@ -843,6 +968,84 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Override CAI_MODEL for this investigation (e.g. bedrock/...).",
     )
     ddos_investigate.add_argument(
+        "--api-base-url",
+        default=None,
+        help="Override the platform-api base URL. Defaults to PLATFORM_API_BASE_URL or http://127.0.0.1:8000.",
+    )
+
+    blueteam_investigate = subparsers.add_parser(
+        "run-blueteam-investigate",
+        help="Run the hybrid blue team investigation pipeline over a log file in S3 (requires CAI extra + platform-api running).",
+    )
+    blueteam_investigate.add_argument(
+        "--s3-uri",
+        required=True,
+        help="S3 URI of the log file to investigate (e.g. s3://my-bucket/logs/auth.log).",
+    )
+    blueteam_investigate.add_argument(
+        "--source-type",
+        required=True,
+        choices=["windows_events", "linux_auth", "dns_logs", "firewall_csv", "web_proxy"],
+        help="Log source type.",
+    )
+    blueteam_investigate.add_argument(
+        "--client-id",
+        default="egs",
+        help="Client identifier for the platform case (default: egs).",
+    )
+    blueteam_investigate.add_argument(
+        "--model",
+        default=None,
+        help="Override CAI_MODEL for this investigation (e.g. bedrock/...).",
+    )
+    blueteam_investigate.add_argument(
+        "--api-base-url",
+        default=None,
+        help="Override the platform-api base URL. Defaults to PLATFORM_API_BASE_URL or http://127.0.0.1:8000.",
+    )
+
+    log_monitor = subparsers.add_parser(
+        "run-log-monitor",
+        help="Poll S3 for new log files and run the blue team pipeline on each (requires CAI extra + platform-api running).",
+    )
+    log_monitor.add_argument(
+        "--source-type",
+        required=True,
+        choices=["windows_events", "linux_auth", "dns_logs", "firewall_csv", "web_proxy"],
+        help="Log source type for all files under the monitored prefix.",
+    )
+    log_monitor.add_argument(
+        "--s3-bucket",
+        default=None,
+        help="S3 bucket to monitor. Defaults to LOG_MONITOR_S3_BUCKET env var.",
+    )
+    log_monitor.add_argument(
+        "--s3-prefix",
+        default=None,
+        help="S3 key prefix to monitor (e.g. logs/prod/). Defaults to LOG_MONITOR_S3_PREFIX env var.",
+    )
+    log_monitor.add_argument(
+        "--client-id",
+        default="egs",
+        help="Client identifier for platform cases (default: egs).",
+    )
+    log_monitor.add_argument(
+        "--interval",
+        type=int,
+        default=None,
+        help="Poll interval in seconds (default: 60 or LOG_MONITOR_POLL_INTERVAL env var).",
+    )
+    log_monitor.add_argument(
+        "--once",
+        action="store_true",
+        help="Run a single poll cycle and exit instead of looping indefinitely.",
+    )
+    log_monitor.add_argument(
+        "--model",
+        default=None,
+        help="Override CAI_MODEL for investigations (e.g. bedrock/...).",
+    )
+    log_monitor.add_argument(
         "--api-base-url",
         default=None,
         help="Override the platform-api base URL. Defaults to PLATFORM_API_BASE_URL or http://127.0.0.1:8000.",
