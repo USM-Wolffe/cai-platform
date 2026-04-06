@@ -45,7 +45,7 @@
 
   <div class='cover-client'>{{ client_name }}</div>
   <div class='cover-crm'>{{ crm_case }}</div>
-  <div class='cover-period'>{{ report_date }}</div>
+  <div class='cover-period'>Período analizado: {{ date_from }} — {{ date_to }}</div>
 
   <div class='conf'>
     <div class='label'>Nota de Confidencialidad</div>
@@ -63,16 +63,17 @@
   <div class='toc'>
     <div class='h2'>Tabla de contenido</div>
     <ul>
-      <li><span class='left'>1. Información General</span><span class='right'>3</span></li>
-      <li><span class='left'>2. Resumen Ejecutivo</span><span class='right'>4</span></li>
-      <li><span class='left'>3. Marco Metodológico: NIST SP 800-61</span><span class='right'>5</span></li>
-      <li class='toc-sub'><span class='left'>3.1 Preparación</span><span class='right'>5</span></li>
-      <li class='toc-sub'><span class='left'>3.2 Detección y Análisis</span><span class='right'>6</span></li>
-      <li class='toc-sub'><span class='left'>3.3 Contención, Erradicación y Recuperación</span><span class='right'>10</span></li>
-      <li class='toc-sub'><span class='left'>3.4 Actividades Post-Incidente</span><span class='right'>11</span></li>
-      <li class='toc-sub'><span class='left'>3.5 Estadísticas</span><span class='right'>12</span></li>
-      <li class='toc-sub'><span class='left'>3.6 Conclusiones</span><span class='right'>14</span></li>
+      <li><span class='left'>1. Información General</span><span class='right'>3 (ref.)</span></li>
+      <li><span class='left'>2. Resumen Ejecutivo</span><span class='right'>4 (ref.)</span></li>
+      <li><span class='left'>3. Marco Metodológico: NIST SP 800-61</span><span class='right'>5 (ref.)</span></li>
+      <li class='toc-sub'><span class='left'>3.1 Preparación</span><span class='right'>5 (ref.)</span></li>
+      <li class='toc-sub'><span class='left'>3.2 Detección y Análisis</span><span class='right'>6 (ref.)</span></li>
+      <li class='toc-sub'><span class='left'>3.3 Contención, Erradicación y Recuperación</span><span class='right'>10 (ref.)</span></li>
+      <li class='toc-sub'><span class='left'>3.4 Actividades Post-Incidente</span><span class='right'>11 (ref.)</span></li>
+      <li class='toc-sub'><span class='left'>3.5 Estadísticas</span><span class='right'>12 (ref.)</span></li>
+      <li class='toc-sub'><span class='left'>3.6 Conclusiones</span><span class='right'>14 (ref.)</span></li>
     </ul>
+    <p class='toc-note'>Los números de página son de referencia.</p>
   </div>
 
   <div class='footer'>
@@ -104,16 +105,32 @@
       <tr><td>Cliente</td><td>{{ client_name }}</td></tr>
       <tr><td>Caso CRM</td><td>{{ crm_case }}</td></tr>
       <tr><td>Informante</td><td>{{ informante }}</td></tr>
-      <tr><td>Workspace</td><td>{{ workspace }}</td></tr>
+      <tr><td>Identificador de logs</td><td>{{ workspace }}</td></tr>
       <tr><td>Case ID</td><td>{{ case_id }}</td></tr>
       <tr><td>Período analizado</td><td>{{ date_from }} al {{ date_to }}</td></tr>
       <tr><td>Total de eventos</td><td>{{ total_events }}</td></tr>
       <tr><td>Día de mayor actividad</td><td>{{ peak_day }}</td></tr>
       <tr><td>Severidad</td><td><span class='badge badge-{{ severity }}'>{{ severity | upper }}</span></td></tr>
       <tr><td>Estrategia aplicada</td><td>{{ strategy }}</td></tr>
-      <tr><td>Fecha del informe</td><td>{{ report_date }}</td></tr>
+      <tr><td>Estado del caso</td><td><span class='badge badge-{{ case_status_css }}'>{{ case_status }}</span></td></tr>
+      <tr><td>Fecha de apertura del caso</td><td>{{ report_date }}</td></tr>
+      <tr><td>Fecha de generación del informe</td><td>{{ generation_date }}</td></tr>
     </tbody>
   </table>
+
+  {% if has_data_quality_warnings %}
+  <div class='dq-warning-box'>
+    <div class='dq-warning-title'>Avisos de calidad de datos</div>
+    {% for w in data_quality_warnings %}
+    <div class='dq-warning-item dq-{{ w.severity }}'>
+      <strong>[{{ w.code }}]</strong> {{ w.message }}
+    </div>
+    {% endfor %}
+    <div class='dq-warning-footer'>
+      Estos avisos son generados automáticamente. El analista debe validarlos antes de entregar el informe al cliente.
+    </div>
+  </div>
+  {% endif %}
 
   <div class='footer'>
     <div class='row'>
@@ -171,7 +188,6 @@
   <div class='cai-narrative-box'>
     <div class='cai-narrative-label'>Análisis ejecutivo</div>
     <p>{{ cai_executive_summary }}</p>
-    <p>{{ cai_incident_context }}</p>
   </div>
   {% endif %}
 
@@ -285,6 +301,13 @@
     Se analizaron <strong>{{ total_events }}</strong> eventos entre el {{ date_from }} y el {{ date_to }}.
     El día de mayor actividad fue <strong>{{ peak_day }}</strong> con {{ peak_events }} eventos.
   </p>
+
+  {% if cai_narrative_enabled %}
+  <div class='cai-narrative-box'>
+    <div class='cai-narrative-label'>Contexto del incidente</div>
+    <p>{{ cai_incident_context }}</p>
+  </div>
+  {% endif %}
 
   {% if by_day %}
   <table class='table-egs table-grid'>
@@ -658,12 +681,25 @@
   </div>
 
   <div class='h3'>Recomendaciones para prevención</div>
+  {% if has_recommended_actions %}
   <ul class='bullets'>
-    <li>Implementar reglas de rate-limiting por segmento /16 en el Firebox para detectar picos de tráfico.</li>
-    <li>Configurar alertas automáticas cuando un solo origen supere el 5% del tráfico total.</li>
-    <li>Revisar y documentar las políticas activas hacia los destinos más afectados.</li>
-    <li>Considerar la implementación de scrubbing de tráfico ante ataques volumétricos futuros.</li>
+    {% for action in recommended_actions %}
+    <li>{{ action }}</li>
+    {% endfor %}
   </ul>
+  {% elif cai_narrative_enabled %}
+  <div class='cai-narrative-box'>
+    <div class='cai-narrative-label'>Recomendaciones del analista</div>
+    <p>{{ cai_recommendations }}</p>
+  </div>
+  {% else %}
+  <ul class='bullets'>
+    <li>Revisar políticas de firewall para los segmentos de red afectados.</li>
+    <li>Configurar alertas automáticas cuando un origen supere umbrales de tráfico inusuales.</li>
+    <li>Documentar y actualizar el plan de respuesta ante incidentes DDoS.</li>
+    <li>Considerar servicios de mitigación de tráfico ante ataques volumétricos futuros.</li>
+  </ul>
+  {% endif %}
 
   <div class='footer'>
     <div class='row'>

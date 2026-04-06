@@ -55,15 +55,20 @@ You are a cybersecurity incident report writer producing content for a professio
 You receive structured JSON data extracted from a completed security investigation.
 Your job is to write clear, accurate narrative sections based strictly on that data.
 
+LANGUAGE RULE (non-negotiable): Write EXCLUSIVELY in Spanish. Every sentence, phrase, and
+technical term must be in Spanish. If you notice you have written any English word or phrase,
+stop and rewrite it in Spanish before continuing. Never switch to English, even mid-sentence.
+
 CRITICAL RULES:
 - Do NOT invent numbers, IP addresses, dates, protocols, or any factual claims not present
   in the provided data. Every numerical claim must cite a value from the input.
-- Write in the same language as the client_name field (use Spanish if the name is Spanish).
 - Populate ALL five fields. Do not leave any field empty or with placeholder text.
 - Respect the character limit per field.
-- executive_summary must be understandable by a non-technical manager — avoid jargon.
-- recommendations must be actionable and specific: reference actual IPs, segments,
-  or protocols from the data when available.
+- executive_summary must be understandable by a non-technical manager — avoid jargon,
+  write 2-3 sentences maximum.
+- recommendations must be actionable and specific: reference actual IPs, ports, segments,
+  or protocols from the data. If top_destinations or attacker_top_dst_ports are present,
+  mention what services/ports were targeted.
 - Do not speculate about attacker identity or motive beyond what the evidence supports.
 """
 
@@ -96,8 +101,8 @@ async def generate_report_narrative(
         ) from exc
 
     agent = build_report_narrative_agent(model=model)
-    facts = _extract_narrative_facts(case_data)
-    prompt = f"Write the report narrative sections based on this investigation data:\n\n{facts}"
+    facts_json = _extract_narrative_facts(case_data)
+    prompt = f"Write the report narrative sections based on this investigation data:\n\n{facts_json}"
 
     result = await Runner.run(
         agent,
@@ -108,7 +113,13 @@ async def generate_report_narrative(
             trace_include_sensitive_data=False,
         ),
     )
-    return result.final_output
+    narrative = result.final_output
+    # Post-generation validation: warn if key facts are missing from the narrative
+    import logging
+    facts_dict = json.loads(facts_json)
+    for warning in _validate_narrative_facts(narrative, facts_dict):
+        logging.getLogger(__name__).warning(warning)
+    return narrative
 
 
 def _extract_narrative_facts(case_data: dict[str, Any]) -> str:
@@ -131,6 +142,14 @@ def _extract_narrative_facts(case_data: dict[str, Any]) -> str:
     protocols = ctx.get("protocols", [])
     top_protocol = protocols[0] if protocols else None
 
+    # Top destinations (what was attacked)
+    raw_dests = ctx.get("top_destinations", [])[:3]
+    top_destinations = [
+        {"dst_ip": d.get("dst_ip"), "events": d.get("events"), "pct": d.get("pct")}
+        for d in raw_dests
+        if d.get("dst_ip")
+    ]
+
     facts: dict[str, Any] = {
         "case_id": ctx.get("case_id"),
         "severity": ctx.get("severity"),
@@ -143,6 +162,9 @@ def _extract_narrative_facts(case_data: dict[str, Any]) -> str:
         "top_protocol": top_protocol,
         "top_attacker_ip": ctx.get("ip_prof_ip"),
         "attacker_event_count": ctx.get("ip_prof_total"),
+        "attacker_top_dst_ports": ctx.get("ip_prof_top_ports", [])[:5],
+        "segment_top_dst_ports": ctx.get("seg_top_dst_ports", [])[:5],
+        "top_destinations": top_destinations if top_destinations else None,
         "observed_signals": ctx.get("observed_signals", []),
         "finding_title": ctx.get("finding_title"),
         "finding_summary": ctx.get("finding_summary"),
@@ -152,6 +174,47 @@ def _extract_narrative_facts(case_data: dict[str, Any]) -> str:
         "containment_alternatives": ctx.get("decision_alternatives", []),
         "nist_stage_reached": last_stage,
     }
-    # Remove None and placeholder "–" values to keep the prompt clean
-    facts = {k: v for k, v in facts.items() if v is not None and v != "–"}
+    # Remove None, placeholder "–", and empty lists to keep the prompt clean
+    facts = {
+        k: v for k, v in facts.items()
+        if v is not None and v != "–" and v != []
+    }
     return json.dumps(facts, indent=2, ensure_ascii=False)
+
+
+def _validate_narrative_facts(narrative: ReportNarrative, facts: dict[str, Any]) -> list[str]:
+    """Check that key data points from facts appear somewhere in the narrative text.
+
+    Returns a list of warning strings (empty = all key facts mentioned).
+    Does NOT raise — validation failures are logged as warnings, not errors.
+    Missing facts indicate the agent may have omitted important data.
+    """
+    all_text = " ".join([
+        narrative.executive_summary,
+        narrative.incident_context,
+        narrative.technical_analysis,
+        narrative.impact_assessment,
+        narrative.recommendations,
+    ])
+
+    warnings: list[str] = []
+    checks = {
+        "top_attacker_ip": facts.get("top_attacker_ip"),
+        "total_events": facts.get("total_events"),
+        "top_source_segment": (
+            facts["top_source_segment"].get("segment")
+            if isinstance(facts.get("top_source_segment"), dict)
+            else facts.get("top_source_segment")
+        ),
+    }
+    for key, val in checks.items():
+        if not val:
+            continue
+        check_val = str(val)
+        # Accept comma or period as thousands separator (47,425,035 ≈ 47.425.035)
+        alt_val = check_val.replace(",", ".") if "," in check_val else check_val.replace(".", ",")
+        if check_val not in all_text and alt_val not in all_text:
+            warnings.append(
+                f"[narrative-validation] '{key}' value ({check_val!r}) not found in generated narrative"
+            )
+    return warnings

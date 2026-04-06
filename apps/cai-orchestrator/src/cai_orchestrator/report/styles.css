@@ -164,6 +164,7 @@ p { margin: 0 0 8px 0; line-height: 1.4; }
 .toc .right { font-weight: 700; }
 .toc li.toc-sub { padding-left: 1.5em; font-size: 10pt; font-weight: normal; }
 .toc li.toc-sub .left { font-weight: normal; }
+.toc-note { font-size: 8pt; color: #888; margin: 6px 0 0 0; font-style: italic; }
 
 /* ====== Tables ====== */
 .table-egs {
@@ -251,9 +252,11 @@ p { margin: 0 0 8px 0; line-height: 1.4; }
   font-weight: 700;
   text-transform: uppercase;
 }
-.badge-high   { background: #fde8e8; color: #c53030; border: 1px solid #e10600; }
-.badge-medium { background: #fef3c7; color: #92400e; border: 1px solid #f59e0b; }
-.badge-low    { background: #d1fae5; color: #065f46; border: 1px solid #10b981; }
+.badge-high        { background: #fde8e8; color: #c53030; border: 1px solid #e10600; }
+.badge-medium      { background: #fef3c7; color: #92400e; border: 1px solid #f59e0b; }
+.badge-low         { background: #d1fae5; color: #065f46; border: 1px solid #10b981; }
+.badge-completed   { background: #d1fae5; color: #065f46; border: 1px solid #10b981; }
+.badge-in-progress { background: #fef3c7; color: #92400e; border: 1px solid #f59e0b; }
 
 /* ====== Signal tags ====== */
 .signal-list { display: flex; flex-wrap: wrap; gap: 5px; margin: 4mm 0; }
@@ -382,4 +385,37 @@ ul.bullets li { margin: 3px 0; line-height: 1.35; }
   color: #2563eb;
   letter-spacing: 0.06em;
   margin-bottom: 6px;
+}
+
+/* ====== Data quality warning boxes ====== */
+.dq-warning-box {
+  border: 1px solid #f59e0b;
+  background: #fffbeb;
+  padding: 10px 14px;
+  margin: 8px 0;
+  border-radius: 4px;
+  page-break-inside: avoid;
+}
+.dq-warning-title {
+  font-size: 8.5pt;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #b45309;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+.dq-warning-item {
+  font-size: 9.5pt;
+  line-height: 1.4;
+  margin-bottom: 5px;
+  padding-left: 8px;
+  border-left: 3px solid #f59e0b;
+}
+.dq-warning-item.dq-warning { border-left-color: #f59e0b; }
+.dq-warning-item.dq-info    { border-left-color: #3b82f6; }
+.dq-warning-footer {
+  font-size: 8pt;
+  color: #666;
+  margin-top: 6px;
+  font-style: italic;
 }

@@ -18,6 +18,12 @@ if TYPE_CHECKING:
 _CASES_DIR = Path(".egs_cases")
 _HERE = Path(__file__).parent
 
+_STRATEGY_LABELS: dict[str, str] = {
+    "ddos_nist_v1": "Análisis DDoS — NIST SP 800-61",
+    "phishing_email_v1": "Análisis de Phishing — NIST SP 800-61",
+    "blueteam_investigation_v1": "Investigación Blue Team — NIST SP 800-61",
+}
+
 
 def _find_artifact_payload(
     case_data: dict[str, Any],
@@ -98,6 +104,106 @@ def _cai_pipeline_duration(stage_progress: list[dict]) -> str:
         return "–"
 
 
+def _is_private_ip(ip: str) -> bool:
+    """True if the IP is an RFC-1918 private or loopback address."""
+    import ipaddress
+    try:
+        return ipaddress.ip_address(ip).is_private
+    except ValueError:
+        return False
+
+
+def _run_data_quality_checks(case_data: dict[str, Any]) -> list[dict[str, str]]:
+    """Run generic heuristic quality checks on collected artifact payloads.
+
+    Returns a list of warning dicts: [{"severity": "warning"|"info", "code": str, "message": str}]
+    Checks do NOT block report generation — they surface information for the analyst.
+    The checks are pipeline-agnostic: they look for artifact sources by name and
+    gracefully skip checks when the relevant artifacts are not present.
+    """
+    warnings: list[dict[str, str]] = []
+
+    # ── Check 1: Private IP dominance ────────────────────────────────────────
+    # Works for DDoS (ddos_top_sources) and blue team (multi_source_logs_normalize)
+    sources_payload = _find_artifact_payload(case_data, "ddos_top_sources")
+    if not sources_payload:
+        sources_payload = _find_artifact_payload(case_data, "multi_source_logs_normalize")
+    if sources_payload:
+        top_ips = sources_payload.get("sources", [])[:10]
+        if top_ips:
+            private_count = sum(1 for s in top_ips if _is_private_ip(s.get("src_ip", "")))
+            pct = private_count / len(top_ips) * 100
+            if pct >= 60:
+                warnings.append({
+                    "severity": "warning",
+                    "code": "PRIVATE_IP_DOMINANCE",
+                    "message": (
+                        f"{private_count} de las {len(top_ips)} IPs de origen principales "
+                        f"son direcciones privadas RFC-1918 ({pct:.0f}%). "
+                        "Esto puede indicar tráfico interno, un entorno NAT, "
+                        "o logs de red interna en lugar de un ataque externo real. "
+                        "Verificar la fuente de los logs antes de aplicar medidas de bloqueo."
+                    ),
+                })
+
+    # ── Check 2: Analysis window very short (< 1 hour) ──────────────────────
+    temporal = _find_artifact_payload(case_data, "ddos_temporal_analysis")
+    if temporal:
+        date_range = temporal.get("date_range", {})
+        if isinstance(date_range, dict) and date_range.get("from") and date_range.get("to"):
+            try:
+                t0 = datetime.fromisoformat(date_range["from"])
+                t1 = datetime.fromisoformat(date_range["to"])
+                if (t1 - t0).total_seconds() < 3600:
+                    warnings.append({
+                        "severity": "info",
+                        "code": "SHORT_ANALYSIS_WINDOW",
+                        "message": (
+                            "El período analizado es menor a 1 hora. "
+                            "Los patrones detectados pueden no ser representativos del comportamiento general de la red."
+                        ),
+                    })
+            except (ValueError, TypeError):
+                pass
+
+        # ── Check 3: Zero events ─────────────────────────────────────────────
+        total_events = temporal.get("total_events", 0)
+        if total_events == 0:
+            warnings.append({
+                "severity": "warning",
+                "code": "NO_EVENTS",
+                "message": (
+                    "No se detectaron eventos en el período analizado. "
+                    "Verificar que el archivo de logs sea válido y no esté vacío."
+                ),
+            })
+
+    return warnings
+
+
+def _compute_case_status(stage_progress: list[dict], run_status: str | None) -> dict[str, str]:
+    """Determine if the case is closed or still in review."""
+    closed_terminal_stages = {"findings_consolidation", "containment_or_monitoring_decision"}
+    last_stage = stage_progress[-1] if stage_progress else {}
+    case_is_closed = (
+        last_stage.get("status") == "completed"
+        and last_stage.get("stage_id") in closed_terminal_stages
+    ) or run_status == "completed"
+    return {
+        "case_status": "Cerrado" if case_is_closed else "En revisión",
+        "case_status_css": "completed" if case_is_closed else "in-progress",
+    }
+
+
+def _compute_data_quality(case_data: dict[str, Any]) -> dict[str, Any]:
+    """Run data quality checks and return template-ready context keys."""
+    dq_warnings = _run_data_quality_checks(case_data)
+    return {
+        "data_quality_warnings": dq_warnings,
+        "has_data_quality_warnings": bool(dq_warnings),
+    }
+
+
 def _build_context(
     case_data: dict[str, Any],
     client_name: str,
@@ -174,7 +280,10 @@ def _build_context(
         "severity": case_data.get("severity", "–"),
         "classification_rationale": classification.get("rationale", "–"),
         "classification_confidence": round(classification.get("confidence", 0) * 100),
-        "strategy": case_data.get("current_strategy_id", "ddos_nist_v1"),
+        "strategy": _STRATEGY_LABELS.get(
+            case_data.get("current_strategy_id", ""),
+            case_data.get("current_strategy_id", "–"),
+        ),
 
         # Temporal
         "date_from": date_from,
@@ -235,6 +344,16 @@ def _build_context(
         "decision_rationale": decision.get("rationale", "–"),
         "decision_option": decision.get("selected_option", "–"),
         "decision_alternatives": decision.get("alternatives", []),
+
+        # Recommended actions (from case data, used in section 3.4)
+        "recommended_actions": case_data.get("recommended_actions", []),
+        "has_recommended_actions": bool(case_data.get("recommended_actions")),
+
+        # Case status derived from stage progress and run_status
+        **_compute_case_status(stage_progress, case_data.get("run_status")),
+
+        # Data quality warnings (heuristic checks on artifact payloads)
+        **_compute_data_quality(case_data),
 
         # Stages
         "stage_progress": [
