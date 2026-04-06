@@ -373,6 +373,11 @@ def _build_context(
         "cai_evidence_count": len(case_data.get("evidence_items", [])),
         "cai_agents": ["ddos-orchestrator", "ddos-processor", "ddos-ip-profiler", "ddos-synthesizer"],
 
+        # Active investigation (synthesizer exploratory queries)
+        "exploratory_queries_performed": case_data.get("metadata", {}).get("exploratory_queries_performed", 0),
+        "exploratory_findings": case_data.get("metadata", {}).get("exploratory_findings", ""),
+        "has_exploratory_findings": bool(case_data.get("metadata", {}).get("exploratory_findings")),
+
         # Timeline (last 10 entries for display)
         "timeline": [
             {**e, "created_fmt": _fmt_datetime(e.get("created_at"))}

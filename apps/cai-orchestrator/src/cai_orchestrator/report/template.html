@@ -621,6 +621,23 @@
     {% endif %}
   </div>
 
+  <div class='h3'>Investigación activa del sintetizador CAI</div>
+  <p>
+    Tras revisar la evidencia colectada en la Fase 2, el agente sintetizador realizó
+    <strong>{{ exploratory_queries_performed }} consulta{% if exploratory_queries_performed != 1 %}s{% endif %}
+    exploratoria{% if exploratory_queries_performed != 1 %}s{% endif %} adicionale{% if exploratory_queries_performed != 1 %}s{% endif %}</strong>
+    sobre los datos crudos antes de emitir su recomendación de contención.
+    {% if exploratory_queries_performed == 0 %}
+    La evidencia colectada fue suficientemente conclusiva para tomar la decisión sin consultas adicionales.
+    {% endif %}
+  </p>
+  {% if has_exploratory_findings %}
+  <div class='dq-warning-box' style='border-left-color:#2563eb; background:#eff6ff;'>
+    <strong style='color:#1d4ed8;'>Hallazgos de la investigación activa</strong><br/>
+    {{ exploratory_findings }}
+  </div>
+  {% endif %}
+
   <div class='h3'>Evidencia que sustenta la decisión</div>
   <p>{{ decision_summary }}</p>
 
@@ -632,6 +649,7 @@
       <tr><td>Hallazgo asociado</td><td>{{ finding_title }}</td></tr>
       <tr><td>Severidad</td><td><span class='badge badge-{{ finding_severity }}'>{{ finding_severity | upper }}</span></td></tr>
       <tr><td>Confianza analítica</td><td>{{ finding_confidence }}%</td></tr>
+      <tr><td>Consultas exploratorias CAI</td><td>{{ exploratory_queries_performed }} / 7</td></tr>
       <tr><td>Detectado</td><td>{{ finding_created }}</td></tr>
     </tbody>
   </table>
@@ -861,6 +879,7 @@
       <tr><td>Día de mayor impacto</td><td>{{ peak_day }}</td></tr>
       <tr><td>Total de eventos</td><td>{{ total_events }}</td></tr>
       <tr><td>Recomendación</td><td>{{ decision_option | upper }}</td></tr>
+      <tr><td>Consultas exploratorias CAI</td><td>{{ exploratory_queries_performed }} / 7</td></tr>
     </tbody>
   </table>
 

@@ -1230,7 +1230,25 @@ async def run_ddos_investigation(
                 "Failed to verify/fallback-close run %s: %s", run_id, exc
             )
 
-        return _parse_synthesis_output(synth_result.final_output, nist_case_id)
+        result = _parse_synthesis_output(synth_result.final_output, nist_case_id)
+
+        # Persist exploratory investigation metadata into the NIST case state so
+        # report-collect can surface it in the generated report.
+        try:
+            from cai.tools.workspace.case_state_store import get_default_case_state_store as _gds
+            _store = _gds()
+            _state = _store.load(nist_case_id)
+            if _state is not None:
+                _state.metadata["exploratory_queries_performed"] = result.exploratory_queries_performed
+                _state.metadata["exploratory_findings"] = result.exploratory_findings
+                _store.save(_state)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Could not persist exploratory metadata for case %s: %s", nist_case_id, exc
+            )
+
+        return result
     finally:
         if session is None:
             client.close()
