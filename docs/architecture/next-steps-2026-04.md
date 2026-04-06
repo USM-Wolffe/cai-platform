@@ -5,23 +5,24 @@ Recomendaciones priorizadas tras el primer pipeline end-to-end en producción
 
 ---
 
-## 1. Terraform drift — riesgo inmediato
+## ~~1. Terraform drift — riesgo inmediato~~ ✓ COMPLETADO
 
-**Qué es:** Las task definitions de ECS (`cai-platform-api:5`, `cai-platform-ui:2`) se
+**Qué era:** Las task definitions de ECS (`cai-platform-api:5`, `cai-platform-ui:2`) se
 modificaron ad-hoc vía AWS CLI. Si alguien corre `terraform apply` sin actualizar los
 `.tf`, las revierte a la versión anterior (memoria 1024 MB → OOM, `DATABASE_URL` roto).
 
-**Prioridad:** Alta — bloquea cualquier deploy futuro.
+**Completado:** `infrastructure/terraform/modules/ecs/main.tf` sincronizado (commit `6ebb36c`).
 
 ---
 
-## 2. Generación del reporte desde la UI
+## ~~2. Generación del reporte desde la UI~~ ✓ COMPLETADO
 
-**Qué es:** `report-collect` y `report-generate` son CLI. `generate_report_from_context()`
+**Qué era:** `report-collect` y `report-generate` son CLI. `generate_report_from_context()`
 ya existe en memoria pero no hay flujo en platform-ui para buscar un case → generar PDF
 → descargarlo. Sin esto, generar un informe requiere acceso SSH al servidor.
 
-**Prioridad:** Alta — sin esto el producto no es autónomo para el analista.
+**Completado:** Expander "Exportar Informe DDoS" añadido al tab Case History (commit `8c89d2d`).
+Usa los artifact payloads almacenados en platform-api — sin dependencia de `.egs_cases/` local.
 
 ---
 
