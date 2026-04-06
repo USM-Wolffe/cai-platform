@@ -1210,9 +1210,10 @@ async def run_ddos_investigation(
 
         # Defensive: if the agent forgot to call complete_run_tool, close the run
         # ourselves and log a warning. complete_run is idempotent in platform-core.
+        # get_run_status returns {"run": {"status": ...}, ...} — status is nested.
         try:
             run_status = client.get_run_status(run_id=run_id)
-            if run_status.get("status") != "completed":
+            if run_status.get("run", {}).get("status") != "completed":
                 import logging
                 logging.getLogger(__name__).warning(
                     "ddos-synthesizer did not call complete_run_tool; closing run %s defensively.",
