@@ -41,8 +41,8 @@ resource "aws_ecs_task_definition" "api" {
   family                   = "${var.name_prefix}-api${local.svc_suffix}"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 512
-  memory                   = 1024
+  cpu                      = 1024
+  memory                   = 4096
   execution_role_arn       = var.execution_role_arn
   task_role_arn            = var.task_role_arn
   tags                     = var.tags
@@ -108,7 +108,7 @@ resource "aws_ecs_task_definition" "ui" {
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
   cpu                      = 1024
-  memory                   = 2048
+  memory                   = 4096
   execution_role_arn       = var.execution_role_arn
   task_role_arn            = var.task_role_arn
   tags                     = var.tags
@@ -121,6 +121,7 @@ resource "aws_ecs_task_definition" "ui" {
     environment = [
       { name = "PLATFORM_API_BASE_URL", value = "http://${var.alb_dns}${local.is_prod ? "" : "/staging"}" },
       { name = "CAI_MODEL",             value = "bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0" },
+      { name = "CAI_AGENT_TYPE",        value = "egs-analist" },
       { name = "WATCHGUARD_S3_BUCKET",  value = var.s3_bucket },
       { name = "WATCHGUARD_S3_REGION",  value = var.aws_region }
     ]
