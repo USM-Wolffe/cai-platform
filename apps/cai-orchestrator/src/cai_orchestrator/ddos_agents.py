@@ -55,6 +55,8 @@ class DDoSSynthesisOutput(BaseModel):
     containment_rationale: str
     nist_stage_reached: str
     evidence_summary: str
+    exploratory_queries_performed: int = 0
+    exploratory_findings: str = ""
 
 
 class DDoSSetupOutput(BaseModel):
@@ -71,6 +73,8 @@ def _parse_synthesis_output(text: str, fallback_case_id: str) -> DDoSSynthesisOu
         try:
             data = _j.loads(match.group(1))
             data.setdefault("nist_case_id", fallback_case_id)
+            data.setdefault("exploratory_queries_performed", 0)
+            data.setdefault("exploratory_findings", "")
             return DDoSSynthesisOutput(**data)
         except Exception:
             pass
@@ -80,6 +84,8 @@ def _parse_synthesis_output(text: str, fallback_case_id: str) -> DDoSSynthesisOu
         try:
             data = _j.loads(match.group(0))
             data.setdefault("nist_case_id", fallback_case_id)
+            data.setdefault("exploratory_queries_performed", 0)
+            data.setdefault("exploratory_findings", "")
             return DDoSSynthesisOutput(**data)
         except Exception:
             pass
@@ -344,6 +350,27 @@ def build_ddos_investigator_agent(
 
     def _get_store():
         return get_default_case_state_store()
+
+    # ── exploration budget (synthesizer active-investigation tools) ─────────
+    # The synthesizer may call up to _EXPLORATION_BUDGET exploratory tool calls
+    # to close gaps in the pre-collected evidence. The counter is closure-local
+    # so each investigation run has its own fresh budget.
+    _exploration_counter = {"count": 0}
+    _EXPLORATION_BUDGET = 7
+
+    def _check_exploration_budget(tool_name: str) -> dict[str, Any] | None:
+        """Return a blocking error dict if the budget is exhausted, else increment and return None."""
+        if _exploration_counter["count"] >= _EXPLORATION_BUDGET:
+            return {
+                "error": "exploration_budget_exhausted",
+                "message": (
+                    f"Exploration budget of {_EXPLORATION_BUDGET} queries already used. "
+                    f"Tool {tool_name} refused. Proceed to STEP 3 (record decision) immediately."
+                ),
+                "queries_used": _exploration_counter["count"],
+            }
+        _exploration_counter["count"] += 1
+        return None
 
     # ── staging info store/retrieve tools ─────────────────────────────────
     # Orchestrator saves staging IDs into the NIST case metadata before
@@ -717,6 +744,212 @@ def build_ddos_investigator_agent(
             input_artifact_id=input_artifact_id,
         )
 
+    # ── synthesizer exploration tools (budget-limited) ──────────────────────
+    # These are budget-gated wrappers used by the synthesizer during its
+    # active-investigation phase. Each call counts toward _EXPLORATION_BUDGET.
+    # All 7 DDoS observation tools are available, plus DuckDB analytics and
+    # custom filter. Non-parameterizable tools (temporal, sources, destinations,
+    # protocol) are useful when the synthesizer needs the full structured_summary
+    # rather than the one-line evidence string stored in the case state.
+
+    @function_tool(strict_mode=False)
+    def explore_ddos_temporal_analysis(
+        run_id: str,
+        input_artifact_id: str,
+    ) -> dict[str, Any]:
+        """Re-run temporal analysis to get the full structured_summary (events_per_day,
+        peak_day, pct_variation, total_events). Use when the case state summary is not
+        detailed enough to answer a specific temporal question.
+        BUDGET: Counts toward the 7-query exploration budget."""
+        blocked = _check_exploration_budget("explore_ddos_temporal_analysis")
+        if blocked is not None:
+            return blocked
+        return service.execute_watchguard_ddos_temporal_analysis(
+            run_id=run_id,
+            requested_by="ddos_synthesizer",
+            input_artifact_id=input_artifact_id,
+        )
+
+    @function_tool(strict_mode=False)
+    def explore_ddos_top_sources(
+        run_id: str,
+        input_artifact_id: str,
+    ) -> dict[str, Any]:
+        """Re-run top-sources analysis to get the full ranked list of source IPs and
+        /16 segments (top_sources, top_segments, dominant_segment, top_source).
+        Use when you need to examine IPs beyond the #1 attacker noted in the summary.
+        BUDGET: Counts toward the 7-query exploration budget."""
+        blocked = _check_exploration_budget("explore_ddos_top_sources")
+        if blocked is not None:
+            return blocked
+        return service.execute_watchguard_ddos_top_sources(
+            run_id=run_id,
+            requested_by="ddos_synthesizer",
+            input_artifact_id=input_artifact_id,
+        )
+
+    @function_tool(strict_mode=False)
+    def explore_ddos_top_destinations(
+        run_id: str,
+        input_artifact_id: str,
+    ) -> dict[str, Any]:
+        """Re-run top-destinations analysis to get the full ranked list of targeted IPs
+        (top_destinations, top_destination, top_destination_pct).
+        Use when you need to understand which internal assets were targeted most.
+        BUDGET: Counts toward the 7-query exploration budget."""
+        blocked = _check_exploration_budget("explore_ddos_top_destinations")
+        if blocked is not None:
+            return blocked
+        return service.execute_watchguard_ddos_top_destinations(
+            run_id=run_id,
+            requested_by="ddos_synthesizer",
+            input_artifact_id=input_artifact_id,
+        )
+
+    @function_tool(strict_mode=False)
+    def explore_ddos_protocol_breakdown(
+        run_id: str,
+        input_artifact_id: str,
+    ) -> dict[str, Any]:
+        """Re-run protocol breakdown to get the full distribution (protocol_distribution,
+        top_protocol, top_protocol_pct, protocol_count).
+        Use when you need the full protocol mix, not just the dominant one.
+        BUDGET: Counts toward the 7-query exploration budget."""
+        blocked = _check_exploration_budget("explore_ddos_protocol_breakdown")
+        if blocked is not None:
+            return blocked
+        return service.execute_watchguard_ddos_protocol_breakdown(
+            run_id=run_id,
+            requested_by="ddos_synthesizer",
+            input_artifact_id=input_artifact_id,
+        )
+
+    @function_tool(strict_mode=False)
+    def explore_ddos_ip_profile(
+        run_id: str,
+        ip: str,
+        input_artifact_id: str,
+    ) -> dict[str, Any]:
+        """Profile a specific source IP across the entire workspace. Use to investigate
+        any IP beyond the one auto-analyzed in Phase 2.
+        BUDGET: Counts toward the 7-query exploration budget."""
+        blocked = _check_exploration_budget("explore_ddos_ip_profile")
+        if blocked is not None:
+            return blocked
+        return service.execute_watchguard_ddos_ip_profile(
+            run_id=run_id,
+            ip=ip,
+            requested_by="ddos_synthesizer",
+            input_artifact_id=input_artifact_id,
+        )
+
+    @function_tool(strict_mode=False)
+    def explore_ddos_segment_analysis(
+        run_id: str,
+        segment: str,
+        input_artifact_id: str,
+    ) -> dict[str, Any]:
+        """Profile all traffic from a /16 segment (format 'x.y'). Use for any segment
+        beyond the dominant one auto-analyzed in Phase 2.
+        BUDGET: Counts toward the 7-query exploration budget."""
+        blocked = _check_exploration_budget("explore_ddos_segment_analysis")
+        if blocked is not None:
+            return blocked
+        return service.execute_watchguard_ddos_segment_analysis(
+            run_id=run_id,
+            segment=segment,
+            requested_by="ddos_synthesizer",
+            input_artifact_id=input_artifact_id,
+        )
+
+    @function_tool(strict_mode=False)
+    def explore_ddos_hourly_distribution(
+        run_id: str,
+        date: str,
+        input_artifact_id: str,
+    ) -> dict[str, Any]:
+        """Analyze hourly event distribution on a specific date (YYYY-MM-DD). Use to
+        profile any day beyond the peak auto-analyzed in Phase 2.
+        BUDGET: Counts toward the 7-query exploration budget."""
+        blocked = _check_exploration_budget("explore_ddos_hourly_distribution")
+        if blocked is not None:
+            return blocked
+        return service.execute_watchguard_ddos_hourly_distribution(
+            run_id=run_id,
+            date=date,
+            requested_by="ddos_synthesizer",
+            input_artifact_id=input_artifact_id,
+        )
+
+    @function_tool(strict_mode=False)
+    def execute_watchguard_duckdb_workspace_analytics_tool(
+        run_id: str,
+        input_artifact_id: str,
+    ) -> dict[str, Any]:
+        """Run the full pre-defined DuckDB analytics pack (top N IPs, protocol breakdown,
+        date range, family counts) in one call. Useful to cross-check totals or see
+        aggregate statistics the DDoS observations didn't surface.
+        Pass the staging manifest artifact_id as input_artifact_id.
+        BUDGET: Counts toward the 7-query exploration budget."""
+        blocked = _check_exploration_budget("execute_watchguard_duckdb_workspace_analytics_tool")
+        if blocked is not None:
+            return blocked
+        return service.execute_watchguard_duckdb_workspace_analytics(
+            run_id=run_id,
+            requested_by="ddos_synthesizer",
+            input_artifact_id=input_artifact_id,
+        )
+
+    @function_tool(strict_mode=False)
+    def execute_watchguard_duckdb_custom_filter(
+        run_id: str,
+        input_artifact_id: str,
+        family: str,
+        filters: list[dict[str, Any]],
+        reason: str,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Run a guarded custom DuckDB filter over the staged workspace. Use this when
+        the pre-computed observations don't answer your question.
+
+        Args:
+          family: 'traffic' | 'alarm' | 'event'
+          filters: list of {field, op, value} where op is 'eq' or 'in'.
+                   Allowed fields for 'traffic': src_ip, dst_ip, action, protocol, policy,
+                                                 src_port, dst_port
+                   Allowed fields for 'alarm':   alarm_type, src_ip, timestamp
+                   Allowed fields for 'event':   type, timestamp
+          reason: short natural-language justification (goes into the audit trail).
+          limit: max rows to return (1..500).
+
+        Returns the matching rows plus matched_row_count and truncated flag.
+
+        BUDGET: Counts toward the 7-query exploration budget. You may call exploration
+        tools AT MOST 7 times per investigation."""
+        blocked = _check_exploration_budget("execute_watchguard_duckdb_custom_filter")
+        if blocked is not None:
+            return blocked
+        return service.execute_watchguard_duckdb_workspace_query(
+            run_id=run_id,
+            family=family,
+            filters=filters,
+            limit=limit,
+            reason=reason,
+            requested_by="ddos_synthesizer",
+            input_artifact_id=input_artifact_id,
+        )
+
+    @function_tool(strict_mode=False)
+    def complete_run_tool(run_id: str, reason: str) -> dict[str, Any]:
+        """Mark the platform-api run as COMPLETED. Call this EXACTLY ONCE as the very
+        last action, AFTER case_build_final_output. Do not call complete_run_tool more
+        than once per investigation."""
+        return client.complete_run(
+            run_id=run_id,
+            requested_by="ddos_synthesizer",
+            reason=reason,
+        )
+
     # ── build agents ─────────────────────────────────────────────────────────
     # Hybrid pipeline: only orchestrator (setup) + synthesizer (decision) are CAI agents.
     # Data collection (7 DDoS observations) is handled by _run_ddos_collection() in Python.
@@ -724,42 +957,119 @@ def build_ddos_investigator_agent(
     synthesizer = Agent(
         name="ddos-synthesizer",
         description=(
-            "Terminal agent that consolidates DDoS findings, records the containment decision, "
-            "and builds the final NIST SP 800-61 structured output for the report."
+            "Active investigator that reviews DDoS findings, queries the data for gaps, "
+            "records the containment decision, and closes the run."
         ),
         instructions=(
-            "You are the DDoS synthesizer. Do NOT ask the user anything. Run these steps immediately.\n\n"
-            "STEP 1: Extract nist_case_id from the input (it appears as 'nist_case_id=case-XXXX').\n"
-            "  load_case_state(case_id=<nist_case_id>) to review all evidence and findings.\n"
-            "  Decide the best response: 'block', 'monitor', or 'investigate_further'.\n\n"
-            "STEP 2: case_record_decision(\n"
+            "You are the DDoS synthesizer. You investigate actively: the pre-collected\n"
+            "evidence is a starting point, not the end. Do NOT ask the user anything.\n\n"
+
+            "## Input parsing (STEP 0)\n"
+            "The user message contains lines of the form 'key=value'. Extract these literal\n"
+            "values and use them in every subsequent tool call:\n"
+            "  - nist_case_id\n"
+            "  - run_id\n"
+            "  - staging_artifact_id\n"
+            "  - summary (a JSON object — parse it mentally to see what was already collected)\n\n"
+
+            "## STEP 1 — Read the case and identify gaps\n"
+            "Call load_case_state(case_id=<nist_case_id>) to review evidence and findings.\n"
+            "Then, think explicitly about what questions the evidence does NOT answer yet.\n"
+            "Examples of real gaps (not every investigation will have them):\n"
+            "  - 'Does top_source_ip hit the same dst_port across all 7 artifacts, or multiple?'\n"
+            "  - 'Is there a second /16 segment with comparable volume to the top segment?'\n"
+            "  - 'Were any ALLOW actions from the top source, or is it 100% DENY?'\n"
+            "  - 'Is the top destination a known internal server or external-facing?'\n"
+            "If the existing evidence is already conclusive, skip directly to STEP 3.\n\n"
+
+            "## STEP 2 — Targeted queries (BUDGET: max 7 calls across ALL exploration tools)\n"
+            "You MAY call ANY of the following tools, at most 7 times TOTAL combined.\n"
+            "Choose based on what gap you identified in STEP 1. Each call needs a clear reason.\n\n"
+            "Full DDoS observation suite (all 7 observations available):\n"
+            "  - explore_ddos_temporal_analysis(run_id, input_artifact_id=<staging_artifact_id>)\n"
+            "      → full events_per_day breakdown, useful when the summary only shows peak_day\n"
+            "  - explore_ddos_top_sources(run_id, input_artifact_id=<staging_artifact_id>)\n"
+            "      → full ranked list of source IPs and /16 segments, not just the #1 attacker\n"
+            "  - explore_ddos_top_destinations(run_id, input_artifact_id=<staging_artifact_id>)\n"
+            "      → full ranked list of targeted internal IPs\n"
+            "  - explore_ddos_protocol_breakdown(run_id, input_artifact_id=<staging_artifact_id>)\n"
+            "      → full protocol distribution, not just the dominant protocol\n"
+            "  - explore_ddos_ip_profile(run_id, ip=<ip>, input_artifact_id=<staging_artifact_id>)\n"
+            "      → forensic profile for any specific IP (repeat for multiple IPs)\n"
+            "  - explore_ddos_segment_analysis(run_id, segment='x.y', input_artifact_id=<staging_artifact_id>)\n"
+            "      → full traffic profile for any /16 segment\n"
+            "  - explore_ddos_hourly_distribution(run_id, date='YYYY-MM-DD', input_artifact_id=<staging_artifact_id>)\n"
+            "      → hourly breakdown for any specific date\n\n"
+            "DuckDB direct access (for questions the observations can't answer):\n"
+            "  - execute_watchguard_duckdb_workspace_analytics_tool(run_id, input_artifact_id=<staging_artifact_id>)\n"
+            "      → aggregate stats pack in one call\n"
+            "  - execute_watchguard_duckdb_custom_filter(run_id, input_artifact_id=<staging_artifact_id>,\n"
+            "      family='traffic', filters=[{'field':'src_ip','op':'eq','value':'<ip>'},\n"
+            "                                  {'field':'action','op':'eq','value':'allow'}],\n"
+            "      reason='<why>', limit=100)\n"
+            "      → filter raw rows by field/value; fields: src_ip, dst_ip, action, protocol,\n"
+            "        policy, src_port, dst_port (traffic); alarm_type, src_ip (alarm); type (event)\n\n"
+            "RULES for STEP 2:\n"
+            "  1. Hard cap: 7 tool calls in total across all exploration tools.\n"
+            "  2. Every call must answer a specific gap you named in STEP 1.\n"
+            "  3. If a query returns zero rows or the same data, do NOT retry — move on.\n"
+            "  4. If after 5 queries you still have no clarity, stop and decide with what you have.\n"
+            "  5. If STEP 1 is already conclusive, skip STEP 2 entirely.\n\n"
+
+            "## STEP 3 — Record the containment decision\n"
+            "case_record_decision(\n"
             "  case_id=<nist_case_id>,\n"
             "  category='containment',\n"
             "  summary=<one-sentence recommendation>,\n"
-            "  rationale=<why, based on evidence and findings>,\n"
+            "  rationale=<why — cite BOTH pre-collected evidence AND any queries from STEP 2>,\n"
             "  selected_option='block'|'monitor'|'investigate_further',\n"
             "  alternatives=[<the other two options>]\n"
             ")\n\n"
-            "STEP 3: case_advance_stage(case_id=<nist_case_id>)\n\n"
-            "STEP 4: case_build_final_output(case_id=<nist_case_id>)\n\n"
-            "After ALL 4 steps, output ONLY this JSON block (fill in real values from the evidence):\n"
+
+            "## STEP 4 — Advance NIST stage and build final output\n"
+            "case_advance_stage(case_id=<nist_case_id>)\n"
+            "case_build_final_output(case_id=<nist_case_id>)\n\n"
+
+            "## STEP 5 — Mark the run as completed\n"
+            "complete_run_tool(run_id=<run_id>,\n"
+            "  reason='Synthesizer completed DDoS investigation with N exploratory queries')\n"
+            "Call this EXACTLY ONCE. Never call it twice.\n\n"
+
+            "## Final output — after ALL 5 steps, output ONLY this JSON block:\n"
             "```json\n"
             '{"nist_case_id":"<case_id>","incident_type":"volumetric_ddos|application_ddos|mixed",'
             '"severity":"critical|high|medium|low","confidence":<0.0-1.0>,'
             '"peak_date":"<YYYY-MM-DD>","top_source_ip":"<ip>","dominant_protocol":"<proto>",'
             '"containment_decision":"block|monitor|investigate_further",'
             '"containment_rationale":"<why>","nist_stage_reached":"<stage>",'
-            '"evidence_summary":"<1-2 sentences>"}\n'
+            '"evidence_summary":"<1-2 sentences>",'
+            '"exploratory_queries_performed":<count 0..7>,'
+            '"exploratory_findings":"<one sentence summarizing what the extra queries revealed, or empty if none>"}\n'
             "```\n\n"
-            "Do NOT hand off to anyone. Do NOT call any DDoS observation tools."
+            "Do NOT hand off. Do NOT loop. Do NOT re-run STEP 2 after STEP 3."
         ),
         tools=[
+            # Case management (free — no budget)
             think,
             load_case_state,
             get_staging_info,
+            list_run_artifacts,
+            read_artifact_content,
             case_record_decision,
             case_advance_stage,
             case_build_final_output,
+            complete_run_tool,
+            # Active investigation — all 7 DDoS observations (budget-gated)
+            explore_ddos_temporal_analysis,
+            explore_ddos_top_sources,
+            explore_ddos_top_destinations,
+            explore_ddos_protocol_breakdown,
+            explore_ddos_ip_profile,
+            explore_ddos_segment_analysis,
+            explore_ddos_hourly_distribution,
+            # DuckDB direct access (budget-gated)
+            execute_watchguard_duckdb_workspace_analytics_tool,
+            execute_watchguard_duckdb_custom_filter,
         ],
         handoffs=[],
         model=_resolve_model(model),
@@ -880,21 +1190,45 @@ async def run_ddos_investigation(
             staging_artifact_id=staging_artifact_id,
         )
 
-        # Phase 3: Synthesis
+        # Phase 3: Synthesis (active investigation — may run up to 5 exploratory
+        # queries, then records decision and closes the run itself).
+        synth_input = (
+            f"nist_case_id={nist_case_id}\n"
+            f"run_id={run_id}\n"
+            f"staging_artifact_id={staging_artifact_id}\n"
+            f"summary={_json.dumps(summary)}"
+        )
         synth_result = await Runner.run(
             synthesizer,
-            input=f"nist_case_id={nist_case_id} summary={_json.dumps(summary)}",
+            input=synth_input,
             run_config=RunConfig(
                 workflow_name="ddos-synthesis",
                 group_id=nist_case_id,
                 trace_include_sensitive_data=False,
             ),
         )
-        client.complete_run(
-            run_id=run_id,
-            requested_by="ddos_investigation",
-            reason="Hybrid DDoS investigation pipeline finished.",
-        )
+
+        # Defensive: if the agent forgot to call complete_run_tool, close the run
+        # ourselves and log a warning. complete_run is idempotent in platform-core.
+        try:
+            run_status = client.get_run_status(run_id=run_id)
+            if run_status.get("status") != "completed":
+                import logging
+                logging.getLogger(__name__).warning(
+                    "ddos-synthesizer did not call complete_run_tool; closing run %s defensively.",
+                    run_id,
+                )
+                client.complete_run(
+                    run_id=run_id,
+                    requested_by="ddos_investigation_fallback",
+                    reason="Synthesizer did not close run; closed by orchestrator fallback.",
+                )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).error(
+                "Failed to verify/fallback-close run %s: %s", run_id, exc
+            )
+
         return _parse_synthesis_output(synth_result.final_output, nist_case_id)
     finally:
         if session is None:
