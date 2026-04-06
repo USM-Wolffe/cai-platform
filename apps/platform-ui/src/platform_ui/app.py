@@ -1641,6 +1641,65 @@ def render_case_history_tab(settings: dict[str, Any]) -> None:
                             )
                             st.rerun()
 
+                    # ── Exportar Informe ──────────────────────────────────────
+                    if _REPORT_AVAILABLE and ddos_results:
+                        with st.expander("Exportar Informe DDoS"):
+                            col_cn, col_inf, col_crm = st.columns(3)
+                            client_name = col_cn.text_input(
+                                "Cliente", value="", key=f"ch_rpt_client_{selected_case_id}"
+                            )
+                            informante = col_inf.text_input(
+                                "Informante", value="", key=f"ch_rpt_informante_{selected_case_id}"
+                            )
+                            crm_case = col_crm.text_input(
+                                "Caso CRM / Ticket", value="", key=f"ch_rpt_crm_{selected_case_id}"
+                            )
+                            fmt = st.radio(
+                                "Formato", ["HTML", "PDF"], horizontal=True,
+                                key=f"ch_rpt_fmt_{selected_case_id}",
+                            )
+                            if st.button(
+                                "Generar informe", key=f"ch_rpt_generate_{selected_case_id}"
+                            ):
+                                try:
+                                    with st.spinner("Generando informe..."):
+                                        title_str = case.get("title", "")
+                                        ws_from_title = (
+                                            title_str.removeprefix("WatchGuard — ")
+                                            if title_str.startswith("WatchGuard — ")
+                                            else selected_case_id[:8]
+                                        )
+                                        case_data_for_report = _build_report_case_data(
+                                            case_id=selected_case_id,
+                                            workspace_id=ws_from_title,
+                                            ddos_results=ddos_results,
+                                            created_at=case.get("created_at"),
+                                        )
+                                        report_bytes = _generate_report_from_context(
+                                            case_data_for_report,
+                                            client_name=client_name or "—",
+                                            informante=informante or "—",
+                                            crm_case=crm_case or "—",
+                                            fmt=fmt.lower(),
+                                        )
+                                    st.session_state[f"ch_rpt_{selected_case_id}"] = (
+                                        report_bytes, fmt.lower(), fmt, ws_from_title
+                                    )
+                                except Exception as exc:
+                                    st.error(f"Error generando informe: {exc}")
+
+                            rpt = st.session_state.get(f"ch_rpt_{selected_case_id}")
+                            if rpt:
+                                report_bytes, ext, fmt_label, ws_id = rpt
+                                mime = "text/html" if ext == "html" else "application/pdf"
+                                st.download_button(
+                                    f"Descargar {fmt_label}",
+                                    data=report_bytes,
+                                    file_name=f"informe-ddos-{ws_id[:30]}.{ext}",
+                                    mime=mime,
+                                    key=f"ch_rpt_download_{selected_case_id}",
+                                )
+
             if msg := st.session_state.pop("ch_pending_navigate", None):
                 st.success(msg)
 
