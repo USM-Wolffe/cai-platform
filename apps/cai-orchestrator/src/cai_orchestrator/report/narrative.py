@@ -114,44 +114,44 @@ async def generate_report_narrative(
 def _extract_narrative_facts(case_data: dict[str, Any]) -> str:
     """Extract only the fields needed for narrative generation.
 
-    Deliberately excludes raw tables (top_sources, by_hour, etc.) to keep the
-    prompt concise and focused on facts the agent should interpret, not transcribe.
+    Uses _build_context (which knows how to read artifact_payloads) to get the
+    already-extracted values, then filters to a concise subset for the agent prompt.
+    Excludes raw tables (top_sources, by_hour) to keep the prompt focused.
     """
-    top_segment = None
-    segments = case_data.get("top_segments")
-    if segments:
-        top_segment = segments[0] if isinstance(segments[0], str) else segments[0].get("segment") or segments[0]
+    from cai_orchestrator.report.generate import _build_context
 
-    top_protocol = None
-    protocols = case_data.get("protocols")
-    if protocols:
-        top_protocol = protocols[0] if isinstance(protocols[0], str) else protocols[0].get("protocol") or protocols[0]
+    ctx = _build_context(case_data, client_name="", informante="", crm_case="")
 
-    stage_progress = case_data.get("stage_progress", [])
+    stage_progress = ctx.get("stage_progress", [])
     last_stage = stage_progress[-1].get("label") if stage_progress else None
 
+    top_segments = ctx.get("top_segments", [])
+    top_segment = top_segments[0] if top_segments else None
+
+    protocols = ctx.get("protocols", [])
+    top_protocol = protocols[0] if protocols else None
+
     facts: dict[str, Any] = {
-        "client_name": case_data.get("client_name"),
-        "case_id": case_data.get("case_id"),
-        "period": f"{case_data.get('date_from')} → {case_data.get('date_to')}",
-        "total_events": case_data.get("total_events"),
-        "peak_day": case_data.get("peak_day"),
-        "peak_events": case_data.get("peak_events"),
-        "severity": case_data.get("severity"),
-        "incident_type": case_data.get("strategy"),
+        "case_id": ctx.get("case_id"),
+        "severity": ctx.get("severity"),
+        "period": f"{ctx.get('date_from')} → {ctx.get('date_to')}",
+        "total_events": ctx.get("total_events"),
+        "peak_day": ctx.get("peak_day"),
+        "peak_events": ctx.get("peak_events"),
+        "incident_type": ctx.get("strategy"),
         "top_source_segment": top_segment,
         "top_protocol": top_protocol,
-        "top_attacker_ip": case_data.get("ip_prof_ip"),
-        "attacker_event_count": case_data.get("ip_prof_total"),
-        "observed_signals": case_data.get("observed_signals", []),
-        "finding_title": case_data.get("finding_title"),
-        "finding_summary": case_data.get("finding_summary"),
-        "finding_confidence_pct": case_data.get("finding_confidence_pct"),
-        "containment_decision": case_data.get("decision_option"),
-        "containment_rationale": case_data.get("decision_rationale"),
-        "containment_alternatives": case_data.get("decision_alternatives", []),
+        "top_attacker_ip": ctx.get("ip_prof_ip"),
+        "attacker_event_count": ctx.get("ip_prof_total"),
+        "observed_signals": ctx.get("observed_signals", []),
+        "finding_title": ctx.get("finding_title"),
+        "finding_summary": ctx.get("finding_summary"),
+        "finding_confidence_pct": ctx.get("finding_confidence"),
+        "containment_decision": ctx.get("decision_option"),
+        "containment_rationale": ctx.get("decision_rationale"),
+        "containment_alternatives": ctx.get("decision_alternatives", []),
         "nist_stage_reached": last_stage,
     }
-    # Remove None values to keep the prompt clean
-    facts = {k: v for k, v in facts.items() if v is not None}
+    # Remove None and placeholder "–" values to keep the prompt clean
+    facts = {k: v for k, v in facts.items() if v is not None and v != "–"}
     return json.dumps(facts, indent=2, ensure_ascii=False)
