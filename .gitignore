@@ -16,3 +16,4 @@ dist/
 /runtime/
 /memory/
 *.egg-info/
+CLAUDE.md

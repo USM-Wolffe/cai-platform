@@ -119,6 +119,22 @@ class PlatformApiClient:
             },
         )
 
+    def complete_run(
+        self,
+        *,
+        run_id: str,
+        requested_by: str,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"requested_by": requested_by}
+        if reason is not None:
+            payload["reason"] = reason
+        return self._request(
+            "POST",
+            f"/runs/{run_id}/complete",
+            json=payload,
+        )
+
     def execute_watchguard_workspace_zip_ingestion(
         self,
         *,

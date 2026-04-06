@@ -3,10 +3,11 @@
 from fastapi import APIRouter, Body, Depends, status
 from fastapi.responses import JSONResponse
 from platform_contracts import EntityKind, EntityRef, ObservationRequest, ObservationStatus
-from platform_core import create_run_for_case, publish_observation_result
+from platform_core import complete_run, create_run_for_case, publish_observation_result
 
 from platform_api.runtime import AppRuntime, get_runtime
 from platform_api.schemas import (
+    CompleteRunRequest,
     CreateRunRequest,
     ExecuteObservationRequest,
     serialize_run_artifacts,
@@ -101,6 +102,30 @@ def list_run_artifacts_endpoint(run_id: str, runtime: AppRuntime = Depends(get_r
         input_artifacts=runtime.get_run_input_artifacts(run),
         output_artifacts=runtime.get_run_output_artifacts(run),
     )
+
+
+@router.post("/{run_id}/complete")
+def complete_run_endpoint(
+    run_id: str,
+    request: CompleteRunRequest = Body(default_factory=CompleteRunRequest),
+    runtime: AppRuntime = Depends(get_runtime),
+) -> dict[str, object]:
+    case, run = complete_run(
+        runtime.case_repository,
+        runtime.run_repository,
+        runtime.audit_port,
+        run_id=run_id,
+        requested_by=request.requested_by,
+        reason=request.reason,
+    )
+    response = serialize_run_summary(
+        run=run,
+        input_artifacts=runtime.get_run_input_artifacts(run),
+        output_artifacts=runtime.get_run_output_artifacts(run),
+        observation_results=runtime.list_run_observation_results(run),
+    )
+    response["case"] = case.model_dump(mode="json")
+    return response
 
 
 @router.post("/{run_id}/observations/watchguard-ingest-workspace-zip", response_model=None)

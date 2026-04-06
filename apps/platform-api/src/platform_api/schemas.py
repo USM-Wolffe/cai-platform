@@ -43,6 +43,11 @@ class ExecuteObservationRequest(ApiModel):
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 
+class CompleteRunRequest(ApiModel):
+    requested_by: str = Field(default="platform_api", min_length=1)
+    reason: str | None = Field(default=None, min_length=1)
+
+
 class ApprovalDecisionInput(ApiModel):
     status: ApprovalStatus
     reason: str = Field(min_length=1)

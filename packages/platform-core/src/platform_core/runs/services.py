@@ -135,6 +135,57 @@ def publish_observation_result(
     return saved_case, saved_run
 
 
+def complete_run(
+    case_repository: CaseRepository,
+    run_repository: RunRepository,
+    audit_port: AuditPort,
+    *,
+    run_id: str,
+    requested_by: str,
+    reason: str | None = None,
+) -> tuple[Case, Run]:
+    """Explicitly mark a reusable run as completed."""
+    run = run_repository.get_run(run_id)
+    if run is None:
+        raise NotFoundError(f"run '{run_id}' was not found")
+    if run.case_ref is None:
+        raise InvalidStateError(f"run '{run_id}' is not attached to a case")
+
+    case = case_repository.get_case(run.case_ref.id)
+    if case is None:
+        raise NotFoundError(f"case '{run.case_ref.id}' was not found")
+
+    if run.status == RunStatus.COMPLETED:
+        return case, run
+    if run.status not in {RunStatus.CREATED, RunStatus.RUNNING}:
+        raise InvalidStateError(
+            f"run '{run.run_id}' cannot be completed from status '{run.status.value}'"
+        )
+
+    updated_run = run.model_copy(
+        update={
+            "status": RunStatus.COMPLETED,
+            "error_summary": None,
+            "updated_at": utc_now(),
+        }
+    )
+    saved_run = run_repository.save_run(updated_run)
+
+    summary = f"Completed run {saved_run.run_id} by {requested_by}"
+    if reason:
+        summary = f"{summary}: {reason}"
+    run_ref = EntityRef(entity_type=EntityKind.RUN, id=saved_run.run_id)
+    updated_case, event = append_timeline_event_to_case(
+        case,
+        kind="run_completed",
+        summary=summary,
+        related_refs=[run_ref],
+    )
+    saved_case = case_repository.save_case(updated_case)
+    audit_port.append_timeline_event(case_id=saved_case.case_id, event=event)
+    return saved_case, saved_run
+
+
 def _resolve_input_artifact_refs(
     *,
     artifact_repository: ArtifactRepository | None,

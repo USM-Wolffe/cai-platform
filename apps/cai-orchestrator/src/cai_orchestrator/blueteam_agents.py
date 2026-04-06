@@ -3,7 +3,7 @@
 Architecture (hybrid, mirrors ddos_agents.py):
     Phase 1 — blueteam-orchestrator (CAI agent)
       Creates platform-api case + run, attaches input artifact.
-      Outputs: SETUP_COMPLETE case_id=<id> run_id=<id> input_artifact_id=<id>
+      Outputs: BlueteamSetupOutput (structured, via output_type)
 
     Phase 2 — _run_blueteam_collection() (plain Python, no LLM)
       Calls all 6 multi_source_logs observations deterministically via HTTP client.
@@ -34,7 +34,6 @@ Or via CLI:
 from __future__ import annotations
 
 import os
-import re
 from typing import Any
 
 from pydantic import BaseModel
@@ -61,17 +60,25 @@ class BlueteamSynthesisOutput(BaseModel):
     evidence_summary: str
 
 
-def _parse_blueteam_setup_complete(text: str) -> tuple[str, str, str]:
-    """Extract (case_id, run_id, input_artifact_id) from the orchestrator's SETUP_COMPLETE line."""
-    match = re.search(
-        r"SETUP_COMPLETE\s+case_id=(\S+)\s+run_id=(\S+)\s+input_artifact_id=(\S+)",
-        text,
-    )
-    if not match:
+class BlueteamSetupOutput(BaseModel):
+    case_id: str
+    run_id: str
+    input_artifact_id: str
+
+
+def _parse_blueteam_setup_output(text: str) -> BlueteamSetupOutput:
+    """Parse the orchestrator's SETUP_COMPLETE text block into a BlueteamSetupOutput."""
+    fields: dict[str, str] = {}
+    for line in text.splitlines():
+        for key in ("case_id", "run_id", "input_artifact_id"):
+            if line.startswith(f"{key}="):
+                fields[key] = line.split("=", 1)[1].strip()
+    missing = [k for k in ("case_id", "run_id", "input_artifact_id") if k not in fields]
+    if missing:
         raise ValueError(
-            f"Orchestrator did not output a SETUP_COMPLETE line.\nFull output:\n{text}"
+            f"Blueteam setup orchestrator output missing fields {missing}. Full output:\n{text}"
         )
-    return match.group(1), match.group(2), match.group(3)
+    return BlueteamSetupOutput(**fields)
 
 
 def _run_blueteam_collection(
@@ -189,8 +196,11 @@ Step 3: Call create_run with:
   - backend_id = "multi_source_logs"
   - input_artifact_ids = [artifact_id from Step 2]
 
-Step 4: Output EXACTLY this line and stop (no other text):
-SETUP_COMPLETE case_id=<case_id> run_id=<run_id> input_artifact_id=<artifact_id>
+After completing all 3 steps, output ONLY this block:
+SETUP_COMPLETE
+case_id=<case_id from Step 1>
+run_id=<run_id from Step 3>
+input_artifact_id=<artifact_id from Step 2>
 """
 
     return Agent(
@@ -351,9 +361,10 @@ async def run_blueteam_investigation(
             trace_include_sensitive_data=False,
         ),
     )
-    case_id, run_id, input_artifact_id = _parse_blueteam_setup_complete(
-        orch_result.final_output or ""
-    )
+    setup = _parse_blueteam_setup_output(orch_result.final_output)
+    case_id = setup.case_id
+    run_id = setup.run_id
+    input_artifact_id = setup.input_artifact_id
 
     # Phase 2: Python deterministic collection
     _run_blueteam_collection(
@@ -381,5 +392,10 @@ async def run_blueteam_investigation(
             group_id=case_id,
             trace_include_sensitive_data=False,
         ),
+    )
+    client.complete_run(
+        run_id=run_id,
+        requested_by="blueteam_investigation",
+        reason="Hybrid blue team investigation pipeline finished.",
     )
     return synth_result.final_output

@@ -10,7 +10,10 @@ import base64
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from cai_orchestrator.report.narrative import ReportNarrative
 
 _CASES_DIR = Path(".egs_cases")
 _HERE = Path(__file__).parent
@@ -265,12 +268,35 @@ def _build_context(
     }
 
 
+def _inject_narrative(context: dict[str, Any], narrative: ReportNarrative | None) -> None:
+    """Inject optional CAI narrative sections into the template context.
+
+    When narrative is None all cai_* variables are set to empty strings and
+    cai_narrative_enabled is False — the template renders exactly as before.
+    """
+    if narrative is not None:
+        context["cai_narrative_enabled"] = True
+        context["cai_executive_summary"] = narrative.executive_summary
+        context["cai_incident_context"] = narrative.incident_context
+        context["cai_technical_analysis"] = narrative.technical_analysis
+        context["cai_impact_assessment"] = narrative.impact_assessment
+        context["cai_recommendations"] = narrative.recommendations
+    else:
+        context["cai_narrative_enabled"] = False
+        context["cai_executive_summary"] = ""
+        context["cai_incident_context"] = ""
+        context["cai_technical_analysis"] = ""
+        context["cai_impact_assessment"] = ""
+        context["cai_recommendations"] = ""
+
+
 def generate_report_from_context(
     case_data: dict[str, Any],
     client_name: str,
     informante: str,
     crm_case: str,
     fmt: str = "html",
+    narrative: ReportNarrative | None = None,
 ) -> bytes:
     """Render a report from an in-memory case_data dict. Returns file bytes.
 
@@ -296,6 +322,7 @@ def generate_report_from_context(
 
     context = _build_context(case_data, client_name, informante, crm_case)
     context["css"] = (_HERE / "styles.css").read_text(encoding="utf-8")
+    _inject_narrative(context, narrative)
 
     env = Environment(
         loader=FileSystemLoader(str(_HERE)),
@@ -326,6 +353,7 @@ def generate_report(
     crm_case: str,
     output_path: Path | None = None,
     fmt: str = "html",
+    narrative: ReportNarrative | None = None,
 ) -> Path:
     """Render the case into an HTML or PDF report.
 
@@ -357,6 +385,7 @@ def generate_report(
     case_data = json.loads(report_json_path.read_text(encoding="utf-8"))
     context = _build_context(case_data, client_name, informante, crm_case)
     context["css"] = (_HERE / "styles.css").read_text(encoding="utf-8")
+    _inject_narrative(context, narrative)
 
     env = Environment(
         loader=FileSystemLoader(str(_HERE)),

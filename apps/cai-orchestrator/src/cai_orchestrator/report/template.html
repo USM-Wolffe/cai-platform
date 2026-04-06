@@ -167,6 +167,14 @@
   <div class='h3'>Decisión de contención</div>
   <p>{{ decision_summary }}</p>
 
+  {% if cai_narrative_enabled %}
+  <div class='cai-narrative-box'>
+    <div class='cai-narrative-label'>Análisis ejecutivo</div>
+    <p>{{ cai_executive_summary }}</p>
+    <p>{{ cai_incident_context }}</p>
+  </div>
+  {% endif %}
+
   <div class='footer'>
     <div class='row'>
       <div class='contact'>
@@ -544,6 +552,14 @@
   <p class='text-muted'>Sin datos de perfil de atacante.</p>
   {% endif %}
 
+  {% if cai_narrative_enabled %}
+  <div class='cai-narrative-box'>
+    <div class='cai-narrative-label'>Análisis técnico</div>
+    <p>{{ cai_technical_analysis }}</p>
+    <p>{{ cai_impact_assessment }}</p>
+  </div>
+  {% endif %}
+
   <div class='footer'>
     <div class='row'>
       <div class='contact'>
@@ -596,6 +612,13 @@
       <tr><td>Detectado</td><td>{{ finding_created }}</td></tr>
     </tbody>
   </table>
+
+  {% if cai_narrative_enabled %}
+  <div class='cai-narrative-box' style='margin-top:6mm;'>
+    <div class='cai-narrative-label'>Recomendaciones del analista</div>
+    <p>{{ cai_recommendations }}</p>
+  </div>
+  {% endif %}
 
   <div class='footer'>
     <div class='row'>

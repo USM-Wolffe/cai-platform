@@ -20,6 +20,17 @@ from .support import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _completed_run_response(
+    *,
+    run_id: str = "run_123",
+    case_id: str = "case_123",
+) -> dict[str, object]:
+    return {
+        "case": {"case_id": case_id},
+        "run": {"run_id": run_id, "status": "completed"},
+    }
+
+
 def test_platform_api_runtime_defaults(monkeypatch):
     monkeypatch.delenv("PLATFORM_API_HOST", raising=False)
     monkeypatch.delenv("PLATFORM_API_PORT", raising=False)
@@ -91,6 +102,9 @@ def test_orchestrator_cli_runs_the_first_flow(tmp_path, monkeypatch, capsys):
                 execution={"observation_result": {"status": "succeeded"}},
             )
 
+        def complete_run(self, *, run_id, requested_by, reason=None):
+            return _completed_run_response(run_id=run_id)
+
         def close(self) -> None:
             return None
 
@@ -116,6 +130,7 @@ def test_orchestrator_cli_runs_the_first_flow(tmp_path, monkeypatch, capsys):
     assert captured_requests[0].summary == "CLI summary"
     assert captured_requests[0].payload["log_type"] == "traffic"
     assert json.loads(stdout)["case"]["case_id"] == "case_123"
+    assert json.loads(stdout)["run"]["status"] == "completed"
 
 
 def test_orchestrator_cli_runs_the_denied_filter_flow(tmp_path, monkeypatch, capsys):
@@ -152,6 +167,9 @@ def test_orchestrator_cli_runs_the_denied_filter_flow(tmp_path, monkeypatch, cap
                 execution={"observation_result": {"status": "succeeded"}},
             )
 
+        def complete_run(self, *, run_id, requested_by, reason=None):
+            return _completed_run_response(run_id=run_id)
+
         def close(self) -> None:
             return None
 
@@ -177,6 +195,7 @@ def test_orchestrator_cli_runs_the_denied_filter_flow(tmp_path, monkeypatch, cap
     assert captured_requests[0].summary == "CLI summary"
     assert captured_requests[0].payload["log_type"] == "traffic"
     assert json.loads(stdout)["case"]["case_id"] == "case_123"
+    assert json.loads(stdout)["run"]["status"] == "completed"
 
 
 def test_orchestrator_cli_runs_the_basic_analytics_flow(tmp_path, monkeypatch, capsys):
@@ -213,6 +232,9 @@ def test_orchestrator_cli_runs_the_basic_analytics_flow(tmp_path, monkeypatch, c
                 execution={"observation_result": {"status": "succeeded"}},
             )
 
+        def complete_run(self, *, run_id, requested_by, reason=None):
+            return _completed_run_response(run_id=run_id)
+
         def close(self) -> None:
             return None
 
@@ -238,6 +260,7 @@ def test_orchestrator_cli_runs_the_basic_analytics_flow(tmp_path, monkeypatch, c
     assert captured_requests[0].summary == "CLI summary"
     assert captured_requests[0].payload["log_type"] == "traffic"
     assert json.loads(stdout)["case"]["case_id"] == "case_123"
+    assert json.loads(stdout)["run"]["status"] == "completed"
 
 
 def test_orchestrator_cli_runs_the_top_talkers_flow(tmp_path, monkeypatch, capsys):
@@ -274,6 +297,9 @@ def test_orchestrator_cli_runs_the_top_talkers_flow(tmp_path, monkeypatch, capsy
                 execution={"observation_result": {"status": "succeeded"}},
             )
 
+        def complete_run(self, *, run_id, requested_by, reason=None):
+            return _completed_run_response(run_id=run_id)
+
         def close(self) -> None:
             return None
 
@@ -299,6 +325,7 @@ def test_orchestrator_cli_runs_the_top_talkers_flow(tmp_path, monkeypatch, capsy
     assert captured_requests[0].summary == "CLI summary"
     assert captured_requests[0].payload["log_type"] == "traffic"
     assert json.loads(stdout)["case"]["case_id"] == "case_123"
+    assert json.loads(stdout)["run"]["status"] == "completed"
 
 
 def test_orchestrator_cli_runs_the_guarded_query_flow(tmp_path, monkeypatch, capsys):
@@ -345,6 +372,9 @@ def test_orchestrator_cli_runs_the_guarded_query_flow(tmp_path, monkeypatch, cap
                 execution={"query_summary": {"record_count": 1}},
             )
 
+        def complete_run(self, *, run_id, requested_by, reason=None):
+            return _completed_run_response(run_id=run_id)
+
         def close(self) -> None:
             return None
 
@@ -377,6 +407,7 @@ def test_orchestrator_cli_runs_the_guarded_query_flow(tmp_path, monkeypatch, cap
     assert captured_requests[0].reason == "Investigate one source IP."
     assert captured_requests[0].approval_reason == "Human approved this narrow query."
     assert json.loads(stdout)["case"]["case_id"] == "case_123"
+    assert json.loads(stdout)["run"]["status"] == "completed"
 
 
 def test_orchestrator_cli_can_read_operational_run_status(monkeypatch, capsys):

@@ -128,3 +128,31 @@ El punto de extensión natural es un middleware FastAPI o una regla en el ALB an
 - **Application Auto Scaling con target tracking**: escala según CPU/memoria; con umbral bajo baja a 1 task en inactividad (no llega a 0, pero reduce costo si se usa una task más pequeña).
 
 El comando `make ecs-stop` / `make ecs-start` ya existe en el Makefile para escalar manualmente.
+
+---
+
+## 12. Presupuesto operativo de la plataforma
+
+**Estado actual:** no existe un documento formal de costos. El gasto real en AWS no está siendo monitoreado de forma estructurada, lo que dificulta proyectar el costo de operar la plataforma con uso real.
+
+**Qué hacer:** elaborar un presupuesto detallado que incluya:
+
+- **Infraestructura base con scale-to-zero aplicado** — cuánto cuesta la plataforma asumiendo que ECS se apaga fuera del horario laboral (solo ALB + RDS 24/7 + ECS ~8h/día laboral).
+- **Costo por investigación por tipo de servicio:**
+  - DDoS (pipeline híbrido): tokens Bedrock del orchestrator + synthesizer, tiempo de Fargate durante la ejecución.
+  - Phishing email: tokens del pipeline multi-agente, tiempo de Fargate.
+  - WatchGuard one-shot: tokens + tiempo de Fargate + operaciones S3/DuckDB.
+- **Proyección mensual según volumen** — ej: 10, 50, 100 investigaciones/mes por tipo.
+- **Comparativo con y sin scale-to-zero** para mostrar el impacto real de implementarlo.
+
+**Por qué importa:** antes de incorporar más analistas o mostrar la plataforma a clientes, hay que saber cuánto cuesta operar y si el modelo es sostenible.
+
+---
+
+## 11. `multi_source_logs` sigue siendo dev-only
+
+**Estado actual:** el backend `multi_source_logs` está registrado en el runtime in-memory/desarrollo y ya tiene superficie pública en el API, pero el wiring PostgreSQL de `_build_postgres_runtime()` todavía no lo registra.
+
+**Por qué es aceptable hoy:** el backend todavía no se considera prod-ready. Mantenerlo solo en dev reduce el riesgo de exponer en producción una superficie que aún está cerrándose y probándose.
+
+**Qué hacer cuando madure:** alinear el wiring de `_build_postgres_runtime()` con el runtime en memoria y volver a validar la superficie pública completa del backend (`create_run`, observaciones, artifacts y lifecycle del run) antes de habilitarlo en producción.

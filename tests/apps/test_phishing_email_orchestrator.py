@@ -163,6 +163,12 @@ def test_orchestrator_cli_runs_the_phishing_email_basic_assessment_flow(tmp_path
                 execution={"observation_result": {"status": "succeeded"}},
             )
 
+        def complete_run(self, *, run_id, requested_by, reason=None):
+            return {
+                "case": {"case_id": "case_123"},
+                "run": {"run_id": run_id, "status": "completed"},
+            }
+
         def close(self) -> None:
             return None
 
@@ -191,3 +197,4 @@ def test_orchestrator_cli_runs_the_phishing_email_basic_assessment_flow(tmp_path
     assert captured_requests[0].summary == "CLI phishing summary"
     assert captured_requests[0].payload["sender"]["email"] == "security.alerts@gmail.com"
     assert json.loads(stdout)["case"]["case_id"] == "case_123"
+    assert json.loads(stdout)["run"]["status"] == "completed"

@@ -123,6 +123,7 @@ Documento guía para armar el PowerPoint: **título**, **qué mostrar en pantall
 
 - Flecha indicando: "los agentes usan la plataforma, no la reemplazan".
 - Nota: "De $10 a menos de $1 por investigación"
+- Modelo actual: Claude Haiku 3.5 (elegido por costo; Sonnet y Opus disponibles si se necesita más razonamiento)
 
 ### Guion
 
@@ -190,7 +191,7 @@ Documento guía para armar el PowerPoint: **título**, **qué mostrar en pantall
 
 - **Línea de tiempo horizontal** con tres puntos:
   - **Corto plazo:** terminar UX de la UI, primera demo real al equipo, incorporar más analistas
-  - **Mediano plazo:** nuevos tipos de análisis (nuevos "backends") enchufados a la misma plataforma
+  - **Mediano plazo:** nuevos tipos de análisis (nuevos "backends") enchufados a la misma plataforma; evaluar migración a un modelo más potente (Sonnet, Gemini, GPT-4o) si los casos de uso lo justifican
   - **Largo plazo:** MCP (protocolos estándar para que los agentes usen herramientas externas), agentes paralelos para investigaciones más rápidas, flujos multi-agente más sofisticados con las herramientas built-in del framework CAI
 - Resaltar "Corto plazo" con color más fuerte.
 

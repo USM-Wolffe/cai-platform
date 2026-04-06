@@ -567,60 +567,110 @@ def render_sidebar() -> dict[str, Any]:
 # ── Tab 1: WatchGuard S3 Investigation ───────────────────────────────────────
 
 
-def _upload_zips_to_s3(settings: dict[str, Any], uploaded_files: list[Any]) -> None:
-    """Upload one or more ZIP files to S3 with per-file progress bars.
+def _render_direct_upload_component(settings: dict[str, Any]) -> None:
+    """Render a browser-side upload component that PUTs directly to S3 via presigned URL.
 
-    Results are accumulated in st.session_state["wg_uploaded_workspaces"] as a
-    list of dicts: {workspace_id, s3_uri, filename, size_mb, uploaded_at}.
+    The file never passes through the ECS container — bytes go browser → S3 directly.
+    After upload, shows the workspace_id for the user to confirm via a Streamlit button.
     """
-    if "wg_uploaded_workspaces" not in st.session_state:
-        st.session_state["wg_uploaded_workspaces"] = []
+    api_url = settings["api_url"].rstrip("/")
 
-    s3 = make_boto3_s3(settings)
+    component_html = f"""
+<style>
+  #uploader {{ font-family: sans-serif; padding: 4px 0; }}
+  #ws-input {{ width: 100%; padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px;
+               font-size: 14px; box-sizing: border-box; margin-bottom: 8px; }}
+  #file-input {{ margin-bottom: 8px; font-size: 13px; }}
+  #upload-btn {{ background: #e63946; color: white; border: none; padding: 8px 20px;
+                 border-radius: 4px; cursor: pointer; font-size: 14px; }}
+  #upload-btn:disabled {{ background: #ccc; cursor: not-allowed; }}
+  #progress-wrap {{ margin-top: 10px; display: none; }}
+  #progress-bar {{ width: 100%; height: 10px; border-radius: 5px; accent-color: #e63946; }}
+  #status-msg {{ font-size: 13px; color: #555; margin-top: 4px; }}
+  #result-box {{ display: none; margin-top: 10px; padding: 8px 12px; background: #f0fdf4;
+                 border: 1px solid #86efac; border-radius: 4px; font-size: 13px; }}
+  #result-ws {{ font-weight: bold; font-family: monospace; }}
+</style>
+<div id="uploader">
+  <input id="ws-input" placeholder="Workspace ID (dejar vacío para auto-generar desde nombre del archivo)" />
+  <input id="file-input" type="file" accept=".zip" />
+  <br/>
+  <button id="upload-btn" onclick="startUpload()" disabled>Subir a S3</button>
+  <div id="progress-wrap">
+    <progress id="progress-bar" value="0" max="100"></progress>
+    <div id="status-msg">Preparando...</div>
+  </div>
+  <div id="result-box">
+    ✓ Subido. Workspace ID: <span id="result-ws"></span><br/>
+    <small>Ingresá ese ID en "Iniciar investigación" (sección 2) para continuar.</small>
+  </div>
+</div>
+<script>
+document.getElementById('file-input').addEventListener('change', function() {{
+  document.getElementById('upload-btn').disabled = !this.files.length;
+  document.getElementById('result-box').style.display = 'none';
+}});
 
-    for f in uploaded_files:
-        workspace_id = f.name.removesuffix(".zip")
-        zip_bytes = f.read()
-        size_mb = len(zip_bytes) / (1024 * 1024)
+async function startUpload() {{
+  const fileInput = document.getElementById('file-input');
+  const file = fileInput.files[0];
+  if (!file) return;
 
-        with st.status(f"Subiendo {f.name} ({size_mb:.0f} MB)...", expanded=True) as status:
-            try:
-                pb = st.progress(0, text="Iniciando subida...")
+  const wsRaw = document.getElementById('ws-input').value.trim();
+  const workspaceId = wsRaw || file.name.replace(/\\.zip$/i, '');
 
-                def _cb(uploaded: int, total: int, _pb: Any = pb) -> None:
-                    pct = uploaded / total
-                    mb_done = uploaded / (1024 * 1024)
-                    mb_total = total / (1024 * 1024)
-                    _pb.progress(pct, text=f"S3 upload: {mb_done:.0f} / {mb_total:.0f} MB")
+  document.getElementById('upload-btn').disabled = true;
+  document.getElementById('progress-wrap').style.display = 'block';
+  document.getElementById('result-box').style.display = 'none';
+  document.getElementById('status-msg').textContent = 'Obteniendo URL firmada...';
 
-                s3_uri = upload_zip_to_s3(
-                    s3, zip_bytes, workspace_id, settings["s3_bucket"],
-                    progress_callback=_cb,
-                )
-                pb.progress(1.0, text=f"Completo ({size_mb:.0f} MB)")
-                st.write(f"`{s3_uri}`")
+  try {{
+    // 1. Get presigned URL from platform-api
+    const resp = await fetch(`{api_url}/s3/presigned-upload-url?workspace_id=${{encodeURIComponent(workspaceId)}}`, {{
+      method: 'POST'
+    }});
+    if (!resp.ok) throw new Error(`API error ${{resp.status}}: ${{await resp.text()}}`);
+    const data = await resp.json();
 
-                entry = {
-                    "workspace_id": workspace_id,
-                    "s3_uri": s3_uri,
-                    "filename": f.name,
-                    "size_mb": size_mb,
-                    "uploaded_at": time.strftime("%H:%M:%S"),
-                }
-                existing = [
-                    w for w in st.session_state["wg_uploaded_workspaces"]
-                    if w["workspace_id"] == workspace_id
-                ]
-                if existing:
-                    existing[0].update(entry)
-                else:
-                    st.session_state["wg_uploaded_workspaces"].append(entry)
+    // 2. PUT directly to S3
+    document.getElementById('status-msg').textContent = 'Subiendo a S3...';
+    await new Promise((resolve, reject) => {{
+      const xhr = new XMLHttpRequest();
+      xhr.upload.addEventListener('progress', (e) => {{
+        if (e.lengthComputable) {{
+          const pct = Math.round((e.loaded / e.total) * 100);
+          const mbDone = (e.loaded / 1048576).toFixed(0);
+          const mbTotal = (e.total / 1048576).toFixed(0);
+          document.getElementById('progress-bar').value = pct;
+          document.getElementById('status-msg').textContent = `S3: ${{mbDone}} / ${{mbTotal}} MB (${{pct}}%)`;
+        }}
+      }});
+      xhr.addEventListener('load', () => {{
+        if (xhr.status >= 200 && xhr.status < 300) resolve();
+        else reject(new Error(`S3 PUT failed: ${{xhr.status}}`));
+      }});
+      xhr.addEventListener('error', () => reject(new Error('Network error')));
+      xhr.open('PUT', data.presigned_url);
+      xhr.setRequestHeader('Content-Type', 'application/zip');
+      xhr.send(file);
+    }});
 
-                status.update(label=f"{f.name} subido correctamente.", state="complete")
+    document.getElementById('progress-bar').value = 100;
+    document.getElementById('status-msg').textContent = 'Completado.';
+    document.getElementById('result-ws').textContent = workspaceId;
+    document.getElementById('result-box').style.display = 'block';
+    document.getElementById('upload-btn').disabled = false;
 
-            except Exception as exc:
-                status.update(label=f"Error subiendo {f.name}: {exc}", state="error")
-                st.error(str(exc))
+  }} catch(err) {{
+    document.getElementById('status-msg').textContent = 'Error: ' + err.message;
+    document.getElementById('status-msg').style.color = 'red';
+    document.getElementById('upload-btn').disabled = false;
+  }}
+}}
+</script>
+"""
+    import streamlit.components.v1 as components
+    components.html(component_html, height=200)
 
 
 def render_watchguard_tab(settings: dict[str, Any]) -> None:
@@ -631,42 +681,10 @@ def render_watchguard_tab(settings: dict[str, Any]) -> None:
 
     # ── Section 1: Upload ─────────────────────────────────────────────────────
     st.subheader("1. Subir ZIPs a S3")
-
-    uploaded_files = st.file_uploader(
-        "ZIPs de SharePoint",
-        type=["zip"],
-        accept_multiple_files=True,
-        key="wg_zips",
-    )
-
-    if uploaded_files:
-        pending_rows = [
-            {
-                "Archivo": f.name,
-                "Workspace ID": f.name.removesuffix(".zip"),
-                "Tamaño": f"{f.size / (1024 * 1024):.1f} MB",
-            }
-            for f in uploaded_files
-        ]
-        st.dataframe(pd.DataFrame(pending_rows), use_container_width=True, hide_index=True)
-
-    if st.button("Subir a S3", key="wg_upload", disabled=not uploaded_files):
-        _upload_zips_to_s3(settings, uploaded_files)
+    _render_direct_upload_component(settings)
+    st.caption("Cuando termine el upload, el workspace ID aparece en el componente. Úsalo en la sección 2.")
 
     uploaded_workspaces: list[dict] = st.session_state.get("wg_uploaded_workspaces", [])
-    if uploaded_workspaces:
-        st.success(f"{len(uploaded_workspaces)} workspace(s) disponibles en S3 (esta sesión)")
-        ws_rows = [
-            {
-                "Workspace ID": w["workspace_id"],
-                "Archivo": w["filename"],
-                "Tamaño": f"{w['size_mb']:.1f} MB",
-                "Subido": w["uploaded_at"],
-                "S3 URI": w["s3_uri"],
-            }
-            for w in uploaded_workspaces
-        ]
-        st.dataframe(pd.DataFrame(ws_rows), use_container_width=True, hide_index=True)
 
     st.divider()
 

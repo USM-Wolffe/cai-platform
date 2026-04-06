@@ -246,6 +246,12 @@ def test_build_platform_investigation_agent_exposes_expected_tool_surface(monkey
         "execute_watchguard_stage_workspace_zip",
         "execute_watchguard_duckdb_workspace_analytics",
         "execute_watchguard_duckdb_workspace_query",
+        "execute_watchguard_ddos_temporal_analysis",
+        "execute_watchguard_ddos_top_destinations",
+        "execute_watchguard_ddos_top_sources",
+        "execute_watchguard_ddos_segment_analysis",
+        "execute_watchguard_ddos_ip_profile",
+        "execute_watchguard_ddos_hourly_distribution",
         "execute_watchguard_workspace_zip_ingestion",
         "execute_watchguard_normalize",
         "execute_watchguard_filter_denied",
@@ -253,6 +259,16 @@ def test_build_platform_investigation_agent_exposes_expected_tool_surface(monkey
         "execute_watchguard_top_talkers_basic",
         "execute_phishing_email_basic_assessment",
         "execute_watchguard_guarded_custom_query",
+        "think",
+        "initialize_case",
+        "record_case_hypothesis",
+        "record_case_evidence",
+        "record_case_finding",
+        "record_case_decision",
+        "advance_case_stage",
+        "build_final_case_output",
+        "save_case_state",
+        "load_case_state",
         "get_case",
         "get_run",
         "get_run_status",
@@ -285,6 +301,9 @@ def test_run_cai_terminal_cli_one_shot_uses_expected_settings_and_runner(monkeyp
     assert recorded["runner_calls"][0]["input"] == "Check the platform health."
     assert recorded["runner_calls"][0]["agent"].name == "egs-analist"
     assert recorded["runner_calls"][0]["agent"].model == "gpt-5.4-mini"
+    assert recorded["runner_calls"][0]["run_config"].workflow_name == "platform-terminal"
+    assert recorded["runner_calls"][0]["run_config"].group_id is None
+    assert recorded["runner_calls"][0]["run_config"].trace_include_sensitive_data is False
 
     body = json.loads(stdout)
     assert body["agent_name"] == "egs-analist"
@@ -298,6 +317,12 @@ def test_run_cai_terminal_cli_one_shot_uses_expected_settings_and_runner(monkeyp
         "execute_watchguard_stage_workspace_zip",
         "execute_watchguard_duckdb_workspace_analytics",
         "execute_watchguard_duckdb_workspace_query",
+        "execute_watchguard_ddos_temporal_analysis",
+        "execute_watchguard_ddos_top_destinations",
+        "execute_watchguard_ddos_top_sources",
+        "execute_watchguard_ddos_segment_analysis",
+        "execute_watchguard_ddos_ip_profile",
+        "execute_watchguard_ddos_hourly_distribution",
         "execute_watchguard_workspace_zip_ingestion",
         "execute_watchguard_normalize",
         "execute_watchguard_filter_denied",
@@ -305,6 +330,16 @@ def test_run_cai_terminal_cli_one_shot_uses_expected_settings_and_runner(monkeyp
         "execute_watchguard_top_talkers_basic",
         "execute_phishing_email_basic_assessment",
         "execute_watchguard_guarded_custom_query",
+        "think",
+        "initialize_case",
+        "record_case_hypothesis",
+        "record_case_evidence",
+        "record_case_finding",
+        "record_case_decision",
+        "advance_case_stage",
+        "build_final_case_output",
+        "save_case_state",
+        "load_case_state",
         "get_case",
         "get_run",
         "get_run_status",
@@ -332,6 +367,69 @@ def test_platform_api_tool_service_can_call_the_phishing_email_endpoint():
         (
             "POST",
             "/runs/run_123/observations/phishing-email-basic-assessment",
+            {"requested_by": "cai_terminal"},
+        ),
+    ]
+
+
+def test_platform_api_tool_service_can_complete_a_run():
+    session = QueuedSession(
+        responses=[
+            FakeResponse(200, {"run": {"run_id": "run_123", "status": "completed"}}),
+        ]
+    )
+    service = cai_orchestrator.PlatformApiToolService(
+        platform_api_client=cai_orchestrator.PlatformApiClient(
+            base_url="http://platform-api.local",
+            session=session,
+        )
+    )
+
+    service.complete_run(
+        run_id="run_123",
+        requested_by="cai_terminal",
+        reason="Interactive triage finished.",
+    )
+
+    assert session.calls == [
+        (
+            "POST",
+            "/runs/run_123/complete",
+            {"requested_by": "cai_terminal", "reason": "Interactive triage finished."},
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("method_name", "path"),
+    [
+        ("execute_multi_source_logs_normalize", "/runs/run_123/observations/multi-source-logs-normalize"),
+        ("execute_multi_source_logs_failed_auth_detect", "/runs/run_123/observations/multi-source-logs-failed-auth-detect"),
+        ("execute_multi_source_logs_lateral_movement_detect", "/runs/run_123/observations/multi-source-logs-lateral-movement-detect"),
+        ("execute_multi_source_logs_privilege_escalation_detect", "/runs/run_123/observations/multi-source-logs-privilege-escalation-detect"),
+        ("execute_multi_source_logs_dns_anomaly_detect", "/runs/run_123/observations/multi-source-logs-dns-anomaly-detect"),
+        ("execute_multi_source_logs_cross_source_correlate", "/runs/run_123/observations/multi-source-logs-cross-source-correlate"),
+    ],
+)
+def test_platform_api_tool_service_can_call_multi_source_log_endpoints(method_name, path):
+    session = QueuedSession(
+        responses=[
+            FakeResponse(200, {"observation_result": {"status": "succeeded"}}),
+        ]
+    )
+    service = cai_orchestrator.PlatformApiToolService(
+        platform_api_client=cai_orchestrator.PlatformApiClient(
+            base_url="http://platform-api.local",
+            session=session,
+        )
+    )
+
+    getattr(service, method_name)(run_id="run_123", requested_by="cai_terminal")
+
+    assert session.calls == [
+        (
+            "POST",
+            path,
             {"requested_by": "cai_terminal"},
         ),
     ]
@@ -421,7 +519,28 @@ def test_platform_api_tool_service_can_attach_workspace_s3_zip_reference():
     ]
 
 
-def _install_fake_cai_sdk(monkeypatch) -> dict[str, object]:
+def test_run_cai_terminal_cli_reports_input_guardrail_tripwire(monkeypatch, capsys):
+    recorded = _install_fake_cai_sdk(monkeypatch, raise_guardrail=True)
+    monkeypatch.setenv("PLATFORM_API_BASE_URL", "http://platform-api.local")
+    monkeypatch.setenv("CAI_AGENT_TYPE", "egs-analist")
+
+    exit_code = cai_orchestrator.run_cli(
+        [
+            "run-cai-terminal",
+            "--prompt",
+            "Check the platform health.",
+        ]
+    )
+
+    stderr = capsys.readouterr().err
+    body = json.loads(stderr)
+
+    assert exit_code == 1
+    assert recorded["runner_calls"][0]["run_config"].workflow_name == "platform-terminal"
+    assert body["error"]["type"] == "input_guardrail_triggered"
+
+
+def _install_fake_cai_sdk(monkeypatch, *, raise_guardrail: bool = False) -> dict[str, object]:
     recorded: dict[str, object] = {
         "agents": [],
         "runner_calls": [],
@@ -430,6 +549,7 @@ def _install_fake_cai_sdk(monkeypatch) -> dict[str, object]:
     cai_module = types.ModuleType("cai")
     sdk_module = types.ModuleType("cai.sdk")
     agents_module = types.ModuleType("cai.sdk.agents")
+    exceptions_module = types.ModuleType("cai.sdk.agents.exceptions")
 
     class FakeAgent:
         def __init__(self, **kwargs):
@@ -452,10 +572,20 @@ def _install_fake_cai_sdk(monkeypatch) -> dict[str, object]:
         def to_input_list(self):
             return [{"role": "assistant", "content": "done"}]
 
+    class RunConfig:
+        def __init__(self, **kwargs):
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+
+    class InputGuardrailTripwireTriggered(Exception):
+        pass
+
     class Runner:
         @staticmethod
-        async def run(agent, input):
-            recorded["runner_calls"].append({"agent": agent, "input": input})
+        async def run(agent, input, run_config=None):
+            recorded["runner_calls"].append({"agent": agent, "input": input, "run_config": run_config})
+            if raise_guardrail:
+                raise InputGuardrailTripwireTriggered("guardrail blocked the prompt")
             return FakeResult(
                 final_output={
                     "agent_name": agent.name,
@@ -472,14 +602,17 @@ def _install_fake_cai_sdk(monkeypatch) -> dict[str, object]:
 
     agents_module.Agent = FakeAgent
     agents_module.Runner = Runner
+    agents_module.RunConfig = RunConfig
     agents_module.function_tool = function_tool
     agents_module.set_tracing_disabled = set_tracing_disabled
     agents_module.set_default_openai_api = set_default_openai_api
+    exceptions_module.InputGuardrailTripwireTriggered = InputGuardrailTripwireTriggered
     sdk_module.agents = agents_module
     cai_module.sdk = sdk_module
 
     monkeypatch.setitem(sys.modules, "cai", cai_module)
     monkeypatch.setitem(sys.modules, "cai.sdk", sdk_module)
     monkeypatch.setitem(sys.modules, "cai.sdk.agents", agents_module)
+    monkeypatch.setitem(sys.modules, "cai.sdk.agents.exceptions", exceptions_module)
 
     return recorded

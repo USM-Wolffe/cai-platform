@@ -26,7 +26,7 @@ from platform_core.ports import (
     RunRepository,
 )
 from platform_core.queries import ensure_backend_supports_query_request, resolve_query_backend
-from platform_core.runs import create_run_for_case, publish_observation_result
+from platform_core.runs import complete_run, create_run_for_case, publish_observation_result
 from platform_core.services import (
     ensure_backend_can_create_run,
     ensure_backend_supports_query_mode,
@@ -52,6 +52,7 @@ __all__ = [
     "append_timeline_event",
     "append_timeline_event_to_case",
     "attach_artifact_ref_to_case",
+    "complete_run",
     "create_case",
     "create_run_for_case",
     "ensure_backend_can_create_run",

@@ -234,6 +234,59 @@ def test_platform_api_client_calls_expected_endpoint_for_guarded_custom_query_sl
     ]
 
 
+def test_platform_api_client_calls_expected_endpoint_for_explicit_run_completion():
+    session = QueuedSession(
+        responses=[
+            FakeResponse(200, {"run": {"run_id": "run_123", "status": "completed"}}),
+        ]
+    )
+    client = PlatformApiClient(base_url="http://platform-api.local", session=session)
+
+    client.complete_run(
+        run_id="run_123",
+        requested_by="tester",
+        reason="Pipeline finished.",
+    )
+
+    assert session.calls == [
+        (
+            "POST",
+            "/runs/run_123/complete",
+            {"requested_by": "tester", "reason": "Pipeline finished."},
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("method_name", "path"),
+    [
+        ("execute_multi_source_logs_normalize", "/runs/run_123/observations/multi-source-logs-normalize"),
+        ("execute_multi_source_logs_failed_auth_detect", "/runs/run_123/observations/multi-source-logs-failed-auth-detect"),
+        ("execute_multi_source_logs_lateral_movement_detect", "/runs/run_123/observations/multi-source-logs-lateral-movement-detect"),
+        ("execute_multi_source_logs_privilege_escalation_detect", "/runs/run_123/observations/multi-source-logs-privilege-escalation-detect"),
+        ("execute_multi_source_logs_dns_anomaly_detect", "/runs/run_123/observations/multi-source-logs-dns-anomaly-detect"),
+        ("execute_multi_source_logs_cross_source_correlate", "/runs/run_123/observations/multi-source-logs-cross-source-correlate"),
+    ],
+)
+def test_platform_api_client_calls_expected_multi_source_log_endpoints(method_name, path):
+    session = QueuedSession(
+        responses=[
+            FakeResponse(200, {"observation_result": {"status": "succeeded"}}),
+        ]
+    )
+    client = PlatformApiClient(base_url="http://platform-api.local", session=session)
+
+    getattr(client, method_name)(run_id="run_123", requested_by="tester")
+
+    assert session.calls == [
+        (
+            "POST",
+            path,
+            {"requested_by": "tester"},
+        ),
+    ]
+
+
 def test_platform_api_client_calls_expected_operational_endpoints():
     session = QueuedSession(
         responses=[
@@ -1095,6 +1148,47 @@ def test_orchestrator_can_read_operational_surface_through_platform_api():
     assert artifacts_payload["output_artifacts"][0]["artifact_id"] == result.execution["artifacts"][0]["artifact_id"]
     assert content_payload["artifact"]["artifact_id"] == result.execution["artifacts"][0]["artifact_id"]
     assert content_payload["content_source"] == "derived_artifact_payload"
+
+
+def test_orchestrator_can_explicitly_complete_a_run_through_platform_api():
+    test_client = create_test_client()
+    app = create_orchestrator_app(
+        platform_api_base_url="http://testserver",
+        session=test_client,
+    )
+
+    result = app.start_watchguard_log_investigation(
+        WatchGuardInvestigationRequest(
+            client_id="test-client",
+            title="Completion case",
+            summary="Create a run and complete it explicitly.",
+            payload=build_watchguard_traffic_csv_payload(
+                [
+                    build_watchguard_traffic_csv_row(
+                        timestamp="15/03/2026 00:00",
+                        action="ALLOW",
+                        policy="allow-web",
+                        protocol="TCP",
+                        src_ip="10.0.0.1",
+                        src_port=51514,
+                        dst_ip="8.8.8.8",
+                        dst_port=53,
+                        question="dns-allow",
+                    )
+                ]
+            ),
+        )
+    )
+
+    completion_payload = app.complete_run(
+        run_id=result.run["run_id"],
+        requested_by="tester",
+        reason="Case triage finished.",
+    )
+
+    assert completion_payload["run"]["run_id"] == result.run["run_id"]
+    assert completion_payload["run"]["status"] == "completed"
+    assert completion_payload["case"]["timeline"][-1]["kind"] == "run_completed"
 
 
 def test_invalid_operator_input_fails_before_any_api_call():

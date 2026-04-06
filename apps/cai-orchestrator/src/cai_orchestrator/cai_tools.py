@@ -76,6 +76,19 @@ class PlatformApiToolService:
             scope=scope,
         )
 
+    def complete_run(
+        self,
+        *,
+        run_id: str,
+        requested_by: str = "cai_terminal",
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        return self.platform_api_client.complete_run(
+            run_id=run_id,
+            requested_by=requested_by,
+            reason=reason,
+        )
+
     def attach_workspace_s3_zip_reference(
         self,
         *,

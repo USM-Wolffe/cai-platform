@@ -1,3 +1,7 @@
+import pytest
+
+from platform_contracts import RunStatus
+
 from .support import (
     build_watchguard_workspace_zip_bytes,
     build_watchguard_traffic_csv_payload,
@@ -33,6 +37,118 @@ def _create_watchguard_case_run(client, payload):
         },
     ).json()["run"]["run_id"]
     return case_id, artifact_id, run_id
+
+
+def _create_multi_source_case_run(client, payload):
+    case_id = client.post(
+        "/cases",
+        json={
+            "client_id": "test-client",
+            "workflow_type": "log_investigation",
+            "title": "Multi-source case",
+            "summary": "Case for multi-source backend execution.",
+        },
+    ).json()["case"]["case_id"]
+    artifact_id = client.post(
+        f"/cases/{case_id}/artifacts/input",
+        json={
+            "format": "json",
+            "payload": payload,
+        },
+    ).json()["artifact"]["artifact_id"]
+    run_id = client.post(
+        "/runs",
+        json={
+            "case_id": case_id,
+            "backend_id": "multi_source_logs",
+            "input_artifact_ids": [artifact_id],
+        },
+    ).json()["run"]["run_id"]
+    return case_id, artifact_id, run_id
+
+
+def _build_linux_auth_payload() -> dict[str, object]:
+    return {
+        "source_type": "linux_auth",
+        "raw_log_lines": [
+            "Mar 15 00:00:01 bastion sshd[1001]: Failed password for invalid user admin from 203.0.113.10 port 22 ssh2",
+            "Mar 15 00:00:21 bastion sshd[1002]: Failed password for invalid user admin from 203.0.113.10 port 22 ssh2",
+            "Mar 15 00:00:41 bastion sshd[1003]: Failed password for invalid user admin from 203.0.113.10 port 22 ssh2",
+            "Mar 15 00:01:01 bastion sshd[1004]: Failed password for invalid user admin from 203.0.113.10 port 22 ssh2",
+            "Mar 15 00:01:21 bastion sshd[1005]: Failed password for invalid user admin from 203.0.113.10 port 22 ssh2",
+            "Mar 15 00:01:41 bastion sshd[1006]: Failed password for invalid user admin from 203.0.113.10 port 22 ssh2",
+        ],
+    }
+
+
+def _build_windows_lateral_payload() -> dict[str, object]:
+    return {
+        "source_type": "windows_events",
+        "raw_log_lines": [
+            '{"EventID":4624,"TimeCreated":"2026-03-15T10:00:00Z","Computer":"ws-1","winlog":{"TargetUserName":"alice","TargetServerName":"srv-1","IpAddress":"10.0.0.10"}}',
+            '{"EventID":4624,"TimeCreated":"2026-03-15T10:02:00Z","Computer":"ws-1","winlog":{"TargetUserName":"alice","TargetServerName":"srv-2","IpAddress":"10.0.0.10"}}',
+            '{"EventID":4624,"TimeCreated":"2026-03-15T10:04:00Z","Computer":"ws-1","winlog":{"TargetUserName":"alice","TargetServerName":"srv-3","IpAddress":"10.0.0.10"}}',
+            '{"EventID":4624,"TimeCreated":"2026-03-15T10:06:00Z","Computer":"ws-1","winlog":{"TargetUserName":"alice","TargetServerName":"srv-4","IpAddress":"10.0.0.10"}}',
+        ],
+    }
+
+
+def _build_linux_priv_esc_payload() -> dict[str, object]:
+    return {
+        "source_type": "linux_auth",
+        "raw_log_lines": [
+            "Mar 15 00:10:00 bastion sudo: analyst : TTY=pts/0 ; PWD=/root ; USER=root ; COMMAND=/bin/bash",
+        ],
+    }
+
+
+def _build_dns_logs_payload() -> dict[str, object]:
+    rows = ["timestamp,src_ip,domain,query_type,ttl"]
+    rows.extend(
+        f"2026-03-15T11:{minute:02d}:{second:02d}Z,10.0.0.44,{idx:02d}abcdefghi.example.com,A,60"
+        for idx, (minute, second) in enumerate(((i // 60, i % 60) for i in range(51)), start=1)
+    )
+    return {
+        "source_type": "dns_logs",
+        "raw_log_lines": rows,
+    }
+
+
+def _build_cross_source_payload() -> dict[str, object]:
+    return {
+        "prior_findings": {
+            "multi_source_logs.failed_auth_detect": [
+                {
+                    "rule_id": "brute_force_same_user",
+                    "category": "brute_force",
+                    "severity": "high",
+                    "count": 6,
+                    "evidence": {"source_ip": "203.0.113.10", "targeted_user": "admin"},
+                    "summary": "Brute force detected.",
+                }
+            ],
+            "multi_source_logs.privilege_escalation_detect": [
+                {
+                    "rule_id": "sudo_su_to_root",
+                    "category": "priv_esc",
+                    "severity": "high",
+                    "count": 1,
+                    "evidence": {"source_ip": "203.0.113.10", "affected_users": ["alice"]},
+                    "summary": "Privilege escalation detected.",
+                }
+            ],
+            "multi_source_logs.lateral_movement_detect": [
+                {
+                    "rule_id": "lateral_movement_user",
+                    "category": "lateral_movement",
+                    "severity": "high",
+                    "count": 4,
+                    "evidence": {"user": "alice"},
+                    "summary": "Lateral movement detected.",
+                }
+            ],
+        }
+    }
 
 
 def test_health_endpoint_works():
@@ -186,6 +302,40 @@ def test_run_creation_works_for_supported_backend():
     assert body["input_artifacts"][0]["artifact_id"] == artifact_id
 
 
+def test_run_creation_works_for_multi_source_logs_backend():
+    client = create_test_client()
+    case_id = client.post(
+        "/cases",
+        json={
+            "client_id": "test-client",
+            "workflow_type": "log_investigation",
+            "title": "Multi-source run case",
+            "summary": "Case for multi-source run creation.",
+        },
+    ).json()["case"]["case_id"]
+    artifact_id = client.post(
+        f"/cases/{case_id}/artifacts/input",
+        json={
+            "format": "json",
+            "payload": _build_linux_auth_payload(),
+        },
+    ).json()["artifact"]["artifact_id"]
+
+    response = client.post(
+        "/runs",
+        json={
+            "case_id": case_id,
+            "backend_id": "multi_source_logs",
+            "input_artifact_ids": [artifact_id],
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["run"]["backend_ref"]["id"] == "multi_source_logs"
+    assert body["input_artifacts"][0]["artifact_id"] == artifact_id
+
+
 def test_unsupported_backend_fails_clearly():
     client = create_test_client()
     case_id = client.post(
@@ -273,6 +423,110 @@ def test_first_predefined_observation_executes_through_the_api_path():
     assert len(case_body["artifacts"]) == 2
     assert len(run_body["output_artifacts"]) == 1
     assert run_body["observation_results"][0]["status"] == "succeeded"
+
+
+def test_run_completion_endpoint_marks_run_completed_and_is_idempotent():
+    client = create_test_client()
+    _, _, run_id = _create_watchguard_case_run(
+        client,
+        build_watchguard_traffic_csv_payload(
+            [
+                build_watchguard_traffic_csv_row(
+                    timestamp="15/03/2026 00:00",
+                    action="ALLOW",
+                    policy="allow-web",
+                    protocol="TCP",
+                    src_ip="10.0.0.1",
+                    src_port=51514,
+                    dst_ip="8.8.8.8",
+                    dst_port=53,
+                    question="dns-allow",
+                )
+            ]
+        ),
+    )
+
+    response = client.post(
+        f"/runs/{run_id}/complete",
+        json={"requested_by": "tester", "reason": "Manual triage finished."},
+    )
+    second_response = client.post(
+        f"/runs/{run_id}/complete",
+        json={"requested_by": "tester", "reason": "Manual triage finished."},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["run"]["status"] == "completed"
+    assert response.json()["case"]["timeline"][-1]["kind"] == "run_completed"
+    assert second_response.status_code == 200
+    assert second_response.json()["run"]["status"] == "completed"
+
+
+def test_run_completion_endpoint_rejects_invalid_terminal_status():
+    client = create_test_client()
+    _, _, run_id = _create_watchguard_case_run(
+        client,
+        build_watchguard_traffic_csv_payload(
+            [
+                build_watchguard_traffic_csv_row(
+                    timestamp="15/03/2026 00:00",
+                    action="ALLOW",
+                    policy="allow-web",
+                    protocol="TCP",
+                    src_ip="10.0.0.1",
+                    src_port=51514,
+                    dst_ip="8.8.8.8",
+                    dst_port=53,
+                    question="dns-allow",
+                )
+            ]
+        ),
+    )
+
+    runtime = client.app.state.runtime
+    run = runtime.run_repository.get_run(run_id)
+    runtime.run_repository.save_run(run.model_copy(update={"status": RunStatus.CANCELLED}))
+
+    response = client.post(
+        f"/runs/{run_id}/complete",
+        json={"requested_by": "tester", "reason": "Should fail."},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["type"] == "invalid_state"
+
+
+@pytest.mark.parametrize(
+    ("payload_builder", "path_suffix", "expected_subtype"),
+    [
+        (_build_linux_auth_payload, "multi-source-logs-normalize", "multi_source_logs.normalize"),
+        (_build_linux_auth_payload, "multi-source-logs-failed-auth-detect", "multi_source_logs.failed_auth_detect"),
+        (_build_windows_lateral_payload, "multi-source-logs-lateral-movement-detect", "multi_source_logs.lateral_movement_detect"),
+        (_build_linux_priv_esc_payload, "multi-source-logs-privilege-escalation-detect", "multi_source_logs.privilege_escalation_detect"),
+        (_build_dns_logs_payload, "multi-source-logs-dns-anomaly-detect", "multi_source_logs.dns_anomaly_detect"),
+        (_build_cross_source_payload, "multi-source-logs-cross-source-correlate", "multi_source_logs.cross_source_correlate"),
+    ],
+)
+def test_multi_source_log_routes_execute_through_the_api_path(payload_builder, path_suffix, expected_subtype):
+    client = create_test_client()
+    case_id, _, run_id = _create_multi_source_case_run(client, payload_builder())
+
+    execute_response = client.post(
+        f"/runs/{run_id}/observations/{path_suffix}",
+        json={"requested_by": "test_client"},
+    )
+
+    assert execute_response.status_code == 200
+    execute_body = execute_response.json()
+    assert execute_body["run"]["backend_ref"]["id"] == "multi_source_logs"
+    assert execute_body["artifacts"][0]["subtype"] == expected_subtype
+
+    case_response = client.get(f"/cases/{case_id}")
+    run_response = client.get(f"/runs/{run_id}")
+
+    assert case_response.status_code == 200
+    assert run_response.status_code == 200
+    assert run_response.json()["run"]["run_id"] == run_id
 
 
 def test_workspace_zip_ingestion_executes_through_the_api_path(monkeypatch):

@@ -57,17 +57,48 @@ class DDoSSynthesisOutput(BaseModel):
     evidence_summary: str
 
 
-def _parse_setup_complete(text: str) -> tuple[str, str, str]:
-    """Extract (nist_case_id, run_id, staging_artifact_id) from the orchestrator's SETUP_COMPLETE line."""
-    match = re.search(
-        r"SETUP_COMPLETE\s+nist_case_id=(\S+)\s+run_id=(\S+)\s+staging_artifact_id=(\S+)",
-        text,
-    )
-    if not match:
+class DDoSSetupOutput(BaseModel):
+    nist_case_id: str
+    run_id: str
+    staging_artifact_id: str
+
+
+def _parse_synthesis_output(text: str, fallback_case_id: str) -> DDoSSynthesisOutput:
+    """Parse the synthesizer's JSON block output into a DDoSSynthesisOutput."""
+    import json as _j, re as _re
+    match = _re.search(r"```json\s*(\{.*?\})\s*```", text, _re.DOTALL)
+    if match:
+        try:
+            data = _j.loads(match.group(1))
+            data.setdefault("nist_case_id", fallback_case_id)
+            return DDoSSynthesisOutput(**data)
+        except Exception:
+            pass
+    # Fallback: try to parse any JSON object in the output
+    match = _re.search(r"\{[^{}]*\"nist_case_id\"[^{}]*\}", text, _re.DOTALL)
+    if match:
+        try:
+            data = _j.loads(match.group(0))
+            data.setdefault("nist_case_id", fallback_case_id)
+            return DDoSSynthesisOutput(**data)
+        except Exception:
+            pass
+    raise ValueError(f"Could not parse DDoSSynthesisOutput from synthesizer output:\n{text}")
+
+
+def _parse_setup_output(text: str) -> DDoSSetupOutput:
+    """Parse the orchestrator's SETUP_COMPLETE text block into a DDoSSetupOutput."""
+    fields: dict[str, str] = {}
+    for line in text.splitlines():
+        for key in ("nist_case_id", "run_id", "staging_artifact_id"):
+            if line.startswith(f"{key}="):
+                fields[key] = line.split("=", 1)[1].strip()
+    missing = [k for k in ("nist_case_id", "run_id", "staging_artifact_id") if k not in fields]
+    if missing:
         raise ValueError(
-            f"Orchestrator did not output a SETUP_COMPLETE line.\nFull output:\n{text}"
+            f"Setup orchestrator output missing fields {missing}. Full output:\n{text}"
         )
-    return match.group(1), match.group(2), match.group(3)
+    return DDoSSetupOutput(**fields)
 
 
 def _run_ddos_collection(
@@ -710,8 +741,16 @@ def build_ddos_investigator_agent(
             "  alternatives=[<the other two options>]\n"
             ")\n\n"
             "STEP 3: case_advance_stage(case_id=<nist_case_id>)\n\n"
-            "STEP 4: case_build_final_output(case_id=<nist_case_id>)\n"
-            "  → use the result to populate all fields of the DDoSSynthesisOutput model.\n\n"
+            "STEP 4: case_build_final_output(case_id=<nist_case_id>)\n\n"
+            "After ALL 4 steps, output ONLY this JSON block (fill in real values from the evidence):\n"
+            "```json\n"
+            '{"nist_case_id":"<case_id>","incident_type":"volumetric_ddos|application_ddos|mixed",'
+            '"severity":"critical|high|medium|low","confidence":<0.0-1.0>,'
+            '"peak_date":"<YYYY-MM-DD>","top_source_ip":"<ip>","dominant_protocol":"<proto>",'
+            '"containment_decision":"block|monitor|investigate_further",'
+            '"containment_rationale":"<why>","nist_stage_reached":"<stage>",'
+            '"evidence_summary":"<1-2 sentences>"}\n'
+            "```\n\n"
             "Do NOT hand off to anyone. Do NOT call any DDoS observation tools."
         ),
         tools=[
@@ -723,7 +762,6 @@ def build_ddos_investigator_agent(
             case_build_final_output,
         ],
         handoffs=[],
-        output_type=DDoSSynthesisOutput,
         model=_resolve_model(model),
     )
 
@@ -735,8 +773,8 @@ def build_ddos_investigator_agent(
         ),
         instructions=(
             "You are the DDoS investigation orchestrator. Given a workspace_id (or an S3 URI), "
-            "set up the investigation and dispatch to ddos-processor.\n\n"
-            "## Setup flow — execute in order, do not skip steps:\n\n"
+            "set up the investigation by calling tools in sequence.\n\n"
+            "## Tool steps — call in this exact order:\n\n"
             "STEP 1: find_latest_workspace_upload(workspace_id=<id>) → note s3_uri.\n"
             "  (If the user provided an s3_uri directly, skip this step.)\n\n"
             "STEP 2: create_case(client_id='unknown', workflow_type='log_investigation',\n"
@@ -747,8 +785,7 @@ def build_ddos_investigator_agent(
             "  input_artifact_ids=[<step3_artifact_id>]) → note run_id.\n\n"
             "STEP 5: execute_watchguard_stage_workspace_zip(run_id=<step4_run_id>)\n"
             "  → note staging_artifact_id from the artifact_id field in the response.\n"
-            "  If this fails, call it once more with the same run_id before giving up.\n"
-            "  You MUST obtain a staging_artifact_id before proceeding to step 6.\n\n"
+            "  If this fails, call it once more with the same run_id before giving up.\n\n"
             "STEP 6: initialize_case_and_save_staging(\n"
             "  title='DDoS Investigation — <workspace_id>',\n"
             "  summary=<same_1_line>,\n"
@@ -756,15 +793,13 @@ def build_ddos_investigator_agent(
             "  staging_artifact_id=<staging_artifact_id from step 5>,\n"
             "  platform_run_id=<run_id from step 4>,\n"
             "  observed_signals=['volumetric ddos', 'traffic flood']\n"
-            "  (The ddos-processor will enrich observed_signals after running protocol breakdown.)\n"
-            "  ) → note the case_id from this response (field 'case_id'; "
-            "this is the NIST case_id, different from the platform case_id in step 2).\n\n"
-            "## Output\n"
-            "STEP 7 — Output the setup result. Do NOT hand off to any agent.\n"
-            "Output EXACTLY this as your last line (replace placeholders with actual values):\n"
-            "SETUP_COMPLETE nist_case_id=<case_id from step 6> run_id=<run_id from step 4> staging_artifact_id=<staging_artifact_id from step 5>\n\n"
-            "IMPORTANT: Do NOT run any DDoS observation tools. "
-            "Do NOT record evidence or findings. Your only job is setup and output."
+            "  ) → note the case_id from this response (this is the NIST case_id).\n\n"
+            "## Final output — after ALL 6 steps are done, output ONLY this block:\n"
+            "SETUP_COMPLETE\n"
+            "nist_case_id=<case_id from step 6>\n"
+            "run_id=<run_id from step 4>\n"
+            "staging_artifact_id=<artifact_id from step 5>\n\n"
+            "Do NOT run DDoS observation tools. Do NOT record evidence. Setup only."
         ),
         tools=[
             think,
@@ -808,11 +843,14 @@ async def run_ddos_investigation(
             "CAI is not installed. Install the optional 'cai' extra to use DDoS investigation."
         ) from exc
 
-    client = PlatformApiClient(base_url=platform_api_base_url, session=session)
+    import httpx as _httpx
+    # Staging a large workspace ZIP can take 10+ minutes — use a long timeout.
+    _session = session or _httpx.Client(base_url=platform_api_base_url, timeout=900.0)
+    client = PlatformApiClient(base_url=platform_api_base_url, session=_session)
     try:
         orchestrator, synthesizer = build_ddos_investigator_agent(
             platform_api_base_url=platform_api_base_url,
-            session=session,
+            session=_session,
             model=model,
             _return_synthesizer=True,
         )
@@ -829,9 +867,10 @@ async def run_ddos_investigation(
                 trace_include_sensitive_data=False,
             ),
         )
-        nist_case_id, run_id, staging_artifact_id = _parse_setup_complete(
-            orch_result.final_output
-        )
+        setup = _parse_setup_output(orch_result.final_output)
+        nist_case_id = setup.nist_case_id
+        run_id = setup.run_id
+        staging_artifact_id = setup.staging_artifact_id
 
         # Phase 2: Deterministic collection (no LLM)
         summary = _run_ddos_collection(
@@ -851,7 +890,12 @@ async def run_ddos_investigation(
                 trace_include_sensitive_data=False,
             ),
         )
-        return synth_result.final_output
+        client.complete_run(
+            run_id=run_id,
+            requested_by="ddos_investigation",
+            reason="Hybrid DDoS investigation pipeline finished.",
+        )
+        return _parse_synthesis_output(synth_result.final_output, nist_case_id)
     finally:
         if session is None:
             client.close()

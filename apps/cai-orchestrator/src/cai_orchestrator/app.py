@@ -88,6 +88,20 @@ class CaiOrchestratorApp:
         """Read current run status through platform-api."""
         return self.platform_api_client.get_run_status(run_id=run_id)
 
+    def complete_run(
+        self,
+        *,
+        run_id: str,
+        requested_by: str = "cai_orchestrator",
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        """Explicitly complete an active run through platform-api."""
+        return self.platform_api_client.complete_run(
+            run_id=run_id,
+            requested_by=requested_by,
+            reason=reason,
+        )
+
     def list_run_artifacts(self, *, run_id: str) -> dict[str, Any]:
         """List run artifacts through platform-api."""
         return self.platform_api_client.list_run_artifacts(run_id=run_id)
@@ -285,6 +299,15 @@ def run_cli(argv: list[str] | None = None) -> int:
                 result = orchestrator.start_watchguard_log_investigation(
                     _build_watchguard_request(args, payload)
                 )
+            result_payload = result.to_dict()
+            completion_response = orchestrator.complete_run(
+                run_id=result.run["run_id"],
+                requested_by="cai_orchestrator_cli",
+                reason=f"One-shot CLI command '{args.command}' finished.",
+            )
+            result_payload["run"] = completion_response["run"]
+            if "case" in completion_response:
+                result_payload["case"] = completion_response["case"]
         finally:
             orchestrator.close()
     except ValueError as exc:
@@ -337,7 +360,7 @@ def run_cli(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+    print(json.dumps(result_payload, indent=2, sort_keys=True))
     return 0
 
 
@@ -640,9 +663,23 @@ def _run_phishing_monitor_command(args: argparse.Namespace) -> int:
                         title=f"{title_prefix} #{i + 1}",
                         summary="Phishing email from IMAP monitor — automated analysis.",
                     )
+                    completed_case: dict[str, Any] | None = None
+                    completed_run: dict[str, Any] | None = None
+                    if not cai_investigate:
+                        completion_response = orchestrator.complete_run(
+                            run_id=result.run.get("run_id", ""),
+                            requested_by="phishing_monitor",
+                            reason="Single email phishing monitor processing finished.",
+                        )
+                        completed_case = completion_response.get("case")
+                        completed_run = completion_response.get("run")
                 finally:
                     orchestrator.close()
                 entry: dict = {"status": "processed", "index": i, **result.to_dict()}
+                if completed_case is not None:
+                    entry["case"] = completed_case
+                if completed_run is not None:
+                    entry["run"] = completed_run
                 results.append(entry)
             except Exception as exc:
                 results.append({"status": "error", "index": i, "message": str(exc)})
@@ -712,10 +749,36 @@ def _run_report_collect_command(args: argparse.Namespace) -> int:
 
 
 def _run_report_generate_command(args: argparse.Namespace) -> int:
-    """Render case-XXXX-report.json to an HTML or PDF file."""
+    """Render case-XXXX-report.json to an HTML or PDF file.
+
+    With --cai, a CAI agent generates the narrative sections before rendering.
+    Without --cai, the report is fully deterministic (no LLM, same as before).
+    """
+    import asyncio
     from pathlib import Path
 
     from cai_orchestrator.report.generate import generate_report
+
+    narrative = None
+    if getattr(args, "cai", False):
+        try:
+            from cai_orchestrator.report.narrative import generate_report_narrative
+
+            settings = load_cai_integration_settings()
+            model = getattr(args, "model", None) or settings.cai_model
+
+            # Read the collected JSON to pass to the narrative agent
+            import json as _json
+            report_json_path = Path(".egs_cases") / f"{args.case_id}-report.json"
+            if not report_json_path.exists():
+                _print_error({"error": {"type": "report_data_not_found",
+                                        "message": f"Run 'report-collect' first: {report_json_path}"}})
+                return 1
+            case_data = _json.loads(report_json_path.read_text(encoding="utf-8"))
+            narrative = asyncio.run(generate_report_narrative(case_data, model=model))
+        except MissingCaiDependencyError as exc:
+            _print_error({"error": {"type": "missing_cai_dependency", "message": str(exc)}})
+            return 1
 
     fmt = args.format
     output_path = Path(args.output) if args.output else None
@@ -727,6 +790,7 @@ def _run_report_generate_command(args: argparse.Namespace) -> int:
             crm_case=args.crm_case,
             output_path=output_path,
             fmt=fmt,
+            narrative=narrative,
         )
     except FileNotFoundError as exc:
         _print_error({"error": {"type": "report_data_not_found", "message": str(exc)}})
@@ -1072,6 +1136,8 @@ def _build_parser() -> argparse.ArgumentParser:
     report_generate.add_argument("--crm-case", required=True, help="CRM/ticket reference (e.g. 'LL-IR-PFALIMENTOS-2024-001').")
     report_generate.add_argument("--format", default="html", choices=["html", "pdf"], help="Output format (default: html).")
     report_generate.add_argument("--output", default=None, help="Output file path. Defaults to .egs_cases/<case_id>-report.{format}.")
+    report_generate.add_argument("--cai", action="store_true", default=False, help="Use CAI agent to generate narrative sections in the report.")
+    report_generate.add_argument("--model", default=None, help="Model override for the CAI narrative agent (e.g. 'bedrock/...').")
 
     return parser
 

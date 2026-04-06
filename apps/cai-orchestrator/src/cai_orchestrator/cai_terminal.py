@@ -53,11 +53,20 @@ def build_egs_analist_agent(
     """Build the minimal CAI agent that operates only through platform-api tools."""
     try:
         from cai.sdk.agents import Agent, function_tool
-        from cai.tools.misc.reasoning import think
     except ImportError as exc:
         raise MissingCaiDependencyError(
             "CAI is not installed. Install the optional 'cai' extra to use the CAI terminal integration."
         ) from exc
+
+    try:
+        from cai.tools.misc.reasoning import think as imported_think
+    except ImportError:
+        @function_tool(strict_mode=False)
+        def think(thought: str) -> dict[str, Any]:
+            """Fallback reasoning tool when the optional CAI think tool is unavailable."""
+            return {"thought": thought}
+    else:
+        think = imported_think
 
     # ── Inline case-state management tools ────────────────────────────────────
     # Replaces cai.tools.workspace.egs_case_tools (not available in public releases).

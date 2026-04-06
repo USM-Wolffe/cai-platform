@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install all packages in editable mode (run once in a venv)
 make install-dev
 
-# Start/stop platform-api in Docker
+# Start/stop platform-api and platform-ui in Docker Compose
 make build
 make up
 make down
@@ -54,16 +54,17 @@ contracts → core → adapters → backends → platform-api
 
 **`packages/platform-adapters`** — Vendor input normalization. Translates raw WatchGuard CSV rows or phishing email payloads into normalized contract types. No backend logic here.
 
-**`packages/platform-backends`** — Deterministic backend implementations. Two backends exist: `watchguard_logs` and `phishing_email`. Each backend exposes predefined observations and optional guarded custom queries. Backends depend on adapters and contracts; they do not depend on core or the API.
+**`packages/platform-backends`** — Deterministic backend implementations. Two backends exist: `watchguard_logs` and `phishing_email`. Each backend exposes predefined observations and optional guarded custom queries. Backends depend on contracts, core, and adapters; they do not depend on the apps.
 
-**`apps/platform-api`** — FastAPI HTTP server. Registers both backends in-process. Routes map directly to backend operations. No database; state lives in-process. Runs containerized on port 8000.
+**`apps/platform-api`** — FastAPI HTTP server. Registers both backends in-process. Routes map directly to backend operations. Uses PostgreSQL automatically when `DATABASE_URL` is defined, otherwise in-memory repositories for local dev/tests. Runs containerized on port 8000.
 
 **`apps/cai-orchestrator`** — Host-run CLI app and CAI integration layer. Contains:
 - `client.py` — Thin `httpx`-based HTTP client for platform-api
 - `cai_tools.py` — Wraps the client as CAI-callable tool functions
 - `cai_terminal.py` — Builds CAI `Agent` objects and runs interactive terminal sessions
-- `app.py` — CLI entry point with `run-watchguard`, `run-phishing-email-*`, `run-cai-terminal`, `run-phishing-monitor` subcommands
+- `app.py` — CLI entry point with `run-watchguard`, `run-phishing-email-*`, `run-cai-terminal`, `run-phishing-monitor`, `run-ddos-investigate`, `report-collect`, and `report-generate`
 - `phishing_agents.py` — Multi-agent phishing investigator pipeline
+- `ddos_agents.py` — Hybrid DDoS investigation pipeline over staged WatchGuard workspaces
 - `imap_monitor.py` — IMAP polling loop that feeds forwarded emails into the phishing pipeline
 
 ## Key Design Decisions
@@ -83,7 +84,7 @@ contracts → core → adapters → backends → platform-api
 | Variable | Default | Purpose |
 |---|---|---|
 | `PLATFORM_API_BASE_URL` | `http://127.0.0.1:8000` | Where cai-orchestrator finds platform-api |
-| `CAI_AGENT_TYPE` | `platform_investigation_agent` | Which agent to build (`egs-analist`, `platform_investigation_agent`, `phishing_investigator`) |
+| `CAI_AGENT_TYPE` | `egs-analist` | Which agent to build (`egs-analist`, `platform_investigation_agent`, `phishing_investigator`, `ddos_investigator`) |
 | `CAI_MODEL` | (none) | LiteLLM model string override; supports `bedrock/...` prefixes |
 | `WATCHGUARD_S3_BUCKET` | `egslatam-cai-dev` | S3 bucket for workspace ZIP uploads |
 | `WATCHGUARD_S3_REGION` | `us-east-2` | AWS region for that bucket |
