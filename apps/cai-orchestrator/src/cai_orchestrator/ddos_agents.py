@@ -1131,6 +1131,49 @@ def build_ddos_investigator_agent(
     return orchestrator
 
 
+def _init_nist_case_state_if_missing(
+    *,
+    nist_case_id: str,
+    workspace_id: str,
+    run_id: str,
+    staging_artifact_id: str,
+) -> None:
+    """Create a minimal NIST case state for the given case_id if none exists.
+
+    Called when the UI bypass path skips Phase 1 (the CAI orchestrator agent that
+    normally creates the state). Without this, _run_ddos_collection raises ValueError
+    because store.load() returns None.
+    """
+    try:
+        from cai.egs_orchestration.models.incident import IncidentInput, IncidentSource
+        from cai.egs_orchestration.services.case_orchestrator import CaseOrchestrator
+        from cai.tools.workspace.case_state_store import get_default_case_state_store
+    except ImportError:
+        return  # CAI not installed — _run_ddos_collection will raise its own error
+
+    store = get_default_case_state_store()
+    if store.load(nist_case_id) is not None:
+        return  # already exists, nothing to do
+
+    orch = CaseOrchestrator()
+    incident = IncidentInput(
+        title=f"WatchGuard — {workspace_id}",
+        summary=f"DDoS investigation for workspace {workspace_id}.",
+        source=IncidentSource.API,
+        workspace=workspace_id,
+        run_id=run_id,
+        labels=["ddos", "watchguard"],
+        # Hint the classifier toward the DDoS strategy.
+        observed_signals=["udp flood"],
+    )
+    state = orch.open_case(incident)
+    # Override the auto-generated case_id so it matches the platform-api case.
+    state.case_id = nist_case_id
+    state.metadata["staging_artifact_id"] = staging_artifact_id
+    state.metadata["platform_run_id"] = run_id
+    store.save(state)
+
+
 async def run_ddos_investigation(
     *,
     workspace_id: str,
@@ -1179,6 +1222,14 @@ async def run_ddos_investigation(
             nist_case_id = existing_case_id
             run_id = existing_run_id
             staging_artifact_id = existing_staging_artifact_id
+            # Phase 1 is skipped, but _run_ddos_collection requires the NIST case
+            # state to exist in the local store. Initialize it if missing.
+            _init_nist_case_state_if_missing(
+                nist_case_id=nist_case_id,
+                workspace_id=workspace_id,
+                run_id=run_id,
+                staging_artifact_id=staging_artifact_id,
+            )
         else:
             orch_result = await Runner.run(
                 orchestrator,
