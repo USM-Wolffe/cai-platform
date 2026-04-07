@@ -26,13 +26,15 @@ Usa los artifact payloads almacenados en platform-api — sin dependencia de `.e
 
 ---
 
-## 3. Cierre del caso desde la plataforma
+## ~~3. Cierre del caso desde la plataforma~~ ✓ COMPLETADO
 
-**Qué es:** El pipeline deja los casos "En revisión" (`mitre_enrichment_optional`
+**Qué era:** El pipeline deja los casos "En revisión" (`mitre_enrichment_optional`
 in_progress). No hay acción que avance a `findings_consolidation` y marque el caso como
 completado. El informe lo refleja pero no lo resuelve.
 
-**Prioridad:** Media — afecta la completitud del flujo, no la generación del informe.
+**Completado:** `run_ddos_investigation` avanza determinísticamente las etapas restantes
+post-síntesis: salta `mitre_enrichment_optional` y completa `findings_consolidation`
+→ estado `READY_FOR_REPORT` (commit `97155a9`).
 
 ---
 
