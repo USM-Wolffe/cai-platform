@@ -713,9 +713,14 @@ def _run_phishing_monitor_command(args: argparse.Namespace) -> int:
         return _process_once()
 
     # Continuous polling loop
+    import logging as _logging
+    _monitor_log = _logging.getLogger(__name__)
     print(json.dumps({"status": "starting_monitor", "poll_interval": settings.poll_interval, "mailbox": settings.mailbox}))
     while True:
-        _process_once()
+        try:
+            _process_once()
+        except Exception as _loop_exc:
+            _monitor_log.error("phishing monitor loop error (will retry): %s", _loop_exc)
         time.sleep(settings.poll_interval)
 
 
