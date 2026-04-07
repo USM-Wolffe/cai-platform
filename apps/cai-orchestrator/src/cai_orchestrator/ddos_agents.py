@@ -1137,12 +1137,19 @@ async def run_ddos_investigation(
     platform_api_base_url: str,
     model: str | None = None,
     session: SyncHttpSession | None = None,
+    existing_case_id: str | None = None,
+    existing_run_id: str | None = None,
+    existing_staging_artifact_id: str | None = None,
 ) -> str:
     """Full hybrid DDoS pipeline: orchestrator setup → Python collection → synthesizer.
 
     Phase 1 (CAI): orchestrator sets up platform-api case/run/staging, outputs SETUP_COMPLETE.
     Phase 2 (Python): _run_ddos_collection runs all 7 observations deterministically.
     Phase 3 (CAI): synthesizer reads the case, records containment decision, builds final output.
+
+    If existing_case_id, existing_run_id, and existing_staging_artifact_id are all
+    provided, Phase 1 is skipped and the pipeline resumes from Phase 2 using those IDs.
+    This allows the UI to hand off a case it already staged to the AI pipeline.
 
     Returns the synthesizer's final output (NIST case JSON as string).
     """
@@ -1167,20 +1174,25 @@ async def run_ddos_investigation(
 
         from cai.sdk.agents import RunConfig
 
-        # Phase 1: Setup
-        orch_result = await Runner.run(
-            orchestrator,
-            input=f"Investigate DDoS workspace_id={workspace_id}",
-            run_config=RunConfig(
-                workflow_name="ddos-investigation",
-                group_id=workspace_id,
-                trace_include_sensitive_data=False,
-            ),
-        )
-        setup = _parse_setup_output(orch_result.final_output)
-        nist_case_id = setup.nist_case_id
-        run_id = setup.run_id
-        staging_artifact_id = setup.staging_artifact_id
+        # Phase 1: Setup (skip if caller already has case/run/staging from the UI)
+        if existing_case_id and existing_run_id and existing_staging_artifact_id:
+            nist_case_id = existing_case_id
+            run_id = existing_run_id
+            staging_artifact_id = existing_staging_artifact_id
+        else:
+            orch_result = await Runner.run(
+                orchestrator,
+                input=f"Investigate DDoS workspace_id={workspace_id}",
+                run_config=RunConfig(
+                    workflow_name="ddos-investigation",
+                    group_id=workspace_id,
+                    trace_include_sensitive_data=False,
+                ),
+            )
+            setup = _parse_setup_output(orch_result.final_output)
+            nist_case_id = setup.nist_case_id
+            run_id = setup.run_id
+            staging_artifact_id = setup.staging_artifact_id
 
         # Phase 2: Deterministic collection (no LLM)
         summary = _run_ddos_collection(
@@ -1262,6 +1274,23 @@ async def run_ddos_investigation(
                         _state, note="Findings consolidation complete — DDoS pipeline finished."
                     )
                 _store.save(_state)
+
+                # Persist full NIST case state as a platform-api artifact so the UI
+                # can generate complete reports without access to .egs_cases/.
+                try:
+                    client.attach_input_artifact(
+                        case_id=nist_case_id,
+                        payload=_state.model_dump(mode="json"),
+                        format="json",
+                        summary="NIST case state snapshot (decisiones + evidencia + etapas)",
+                        metadata={"subtype": "watchguard.nist_case_snapshot"},
+                    )
+                except Exception as _snap_exc:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "Could not persist NIST snapshot artifact for case %s: %s",
+                        nist_case_id, _snap_exc,
+                    )
         except Exception as exc:
             import logging
             logging.getLogger(__name__).warning(

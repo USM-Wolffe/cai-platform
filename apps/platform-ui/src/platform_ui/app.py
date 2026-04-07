@@ -6,6 +6,7 @@ import asyncio
 import concurrent.futures
 import json
 import os
+import threading
 import time
 from typing import Any
 
@@ -61,6 +62,7 @@ def _noop_on_thread_signal(signum: int, handler: Any) -> Any:
 _signal_module.signal = _noop_on_thread_signal  # type: ignore[assignment]
 try:
     from cai_orchestrator.cai_terminal import build_egs_analist_agent
+    from cai_orchestrator.ddos_agents import run_ddos_investigation as _run_ddos_investigation_pipeline
     from cai_orchestrator.phishing_agents import build_phishing_investigator_agent
     from cai.sdk.agents import Runner, set_tracing_disabled  # type: ignore[import]
 
@@ -425,8 +427,14 @@ def _build_report_case_data(
     workspace_id: str,
     ddos_results: dict[str, Any],
     created_at: str | None = None,
+    nist_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Assemble a case_data dict compatible with generate_report_from_context()."""
+    """Assemble a case_data dict compatible with generate_report_from_context().
+
+    If nist_snapshot is provided (the full NIST case state stored as a platform-api
+    artifact), it is used as the primary source for decisions/findings/stage_progress.
+    ddos_results still provides artifact_payloads so observation tables render.
+    """
     source_map = {
         "temporal": "ddos_temporal_analysis",
         "sources": "ddos_top_sources",
@@ -436,13 +444,31 @@ def _build_report_case_data(
         "segment": "ddos_segment_analysis",
         "ip_profile": "ddos_ip_profile",
     }
-    evidence_items = []
     artifact_payloads: dict[str, Any] = {}
     for key, source in source_map.items():
         if data := ddos_results.get(key):
-            fake_id = f"report-{key}"
-            evidence_items.append({"source": source, "artifact_refs": [fake_id]})
-            artifact_payloads[fake_id] = data
+            artifact_payloads[f"report-{key}"] = data
+
+    if nist_snapshot:
+        # Full NIST state available — use it as the base, override artifact_payloads.
+        # The snapshot already has evidence_items with real artifact_ids; add fake-id
+        # payloads so the report's observation sections can render from ddos_results too.
+        case_data = dict(nist_snapshot)
+        # Merge artifact_payloads from ddos_results (fake IDs) alongside any real ones.
+        existing_payloads = case_data.get("artifact_payloads", {})
+        case_data["artifact_payloads"] = {**existing_payloads, **artifact_payloads}
+        # Ensure top-level keys expected by the report generator.
+        case_data.setdefault("case_id", case_id)
+        case_data.setdefault("current_strategy_id", "ddos_nist_v1")
+        if case_data.get("incident") and not case_data["incident"].get("created_at"):
+            case_data["incident"]["created_at"] = created_at or ""
+        return case_data
+
+    # Fallback: observations-only (no AI decisions/findings).
+    evidence_items = []
+    for key, source in source_map.items():
+        if ddos_results.get(key):
+            evidence_items.append({"source": source, "artifact_refs": [f"report-{key}"]})
 
     return {
         "case_id": case_id,
@@ -461,6 +487,46 @@ def _build_report_case_data(
         "evidence_items": evidence_items,
         "artifact_payloads": artifact_payloads,
     }
+
+
+# ── DDoS pipeline background launcher ────────────────────────────────────────
+
+
+def _launch_ddos_pipeline_bg(
+    settings: dict[str, Any],
+    workspace_id: str,
+    case_id: str,
+    run_id: str,
+    staging_artifact_id: str,
+    status_key: str,
+    result_key: str,
+) -> None:
+    """Run the full DDoS AI pipeline (Phase 2 + 3) in a background thread.
+
+    Writes to st.session_state[status_key] ('running'|'done'|'error') and
+    st.session_state[result_key] (result dict or error string).
+    Designed to be launched via threading.Thread so Streamlit can continue rendering.
+    """
+    if not _CAI_AVAILABLE:
+        st.session_state[status_key] = "error"
+        st.session_state[result_key] = "CAI not available in this environment."
+        return
+    st.session_state[status_key] = "running"
+    try:
+        result = asyncio.run(
+            _run_ddos_investigation_pipeline(
+                workspace_id=workspace_id,
+                platform_api_base_url=settings["platform_api_base_url"],
+                existing_case_id=case_id,
+                existing_run_id=run_id,
+                existing_staging_artifact_id=staging_artifact_id,
+            )
+        )
+        st.session_state[result_key] = result.model_dump() if hasattr(result, "model_dump") else str(result)
+        st.session_state[status_key] = "done"
+    except Exception as exc:
+        st.session_state[result_key] = str(exc)
+        st.session_state[status_key] = "error"
 
 
 # ── Phishing dashboard data ───────────────────────────────────────────────────
@@ -1077,7 +1143,43 @@ def _render_ddos_suite(settings: dict[str, Any]) -> None:
 
     if not ddos:
         st.caption("Corre el análisis DDoS especializado sobre los logs del workspace.")
-        if st.button("Iniciar Análisis DDoS", key="wg_ddos_run"):
+
+        # ── Lanzar pipeline CAI completo (Phase 2 + 3) ───────────────────────
+        pipeline_status = st.session_state.get("wg_pipeline_status")
+        if _CAI_AVAILABLE:
+            if pipeline_status == "running":
+                st.info("Pipeline CAI en ejecución — las 3 fases están corriendo en segundo plano. Actualizá la página para ver el resultado.")
+            elif pipeline_status == "done":
+                st.success("Pipeline CAI completado. Los resultados están en el tab **Case History**.")
+                if st.button("Limpiar y ver análisis rápido", key="wg_pipeline_done_clear"):
+                    st.session_state.pop("wg_pipeline_status", None)
+                    st.session_state.pop("wg_pipeline_result", None)
+                    st.rerun()
+            elif pipeline_status == "error":
+                st.error(f"Pipeline CAI falló: {st.session_state.get('wg_pipeline_result', 'Error desconocido')}")
+                if st.button("Reintentar", key="wg_pipeline_retry"):
+                    st.session_state.pop("wg_pipeline_status", None)
+                    st.rerun()
+            else:
+                case_id = st.session_state.get("wg_case_id")
+                ws_id = st.session_state.get("wg_workspace_id", "workspace")
+                if case_id and st.button(
+                    "Lanzar análisis CAI completo (Phase 1→2→3)",
+                    key="wg_launch_full_pipeline",
+                    type="primary",
+                    help="Corre las 3 fases del pipeline: orquestador CAI → recolección → síntesis. Más lento pero produce decisión de contención y cierra el caso.",
+                ):
+                    t = threading.Thread(
+                        target=_launch_ddos_pipeline_bg,
+                        args=(settings, ws_id, case_id, run_id, staging_artifact_id,
+                              "wg_pipeline_status", "wg_pipeline_result"),
+                        daemon=True,
+                    )
+                    t.start()
+                    st.rerun()
+            st.divider()
+
+        if st.button("Iniciar Análisis DDoS rápido", key="wg_ddos_run"):
             _run_ddos_observations(settings, run_id, staging_artifact_id)
             st.rerun()
         return
@@ -1669,11 +1771,30 @@ def render_case_history_tab(settings: dict[str, Any]) -> None:
                                             if title_str.startswith("WatchGuard — ")
                                             else selected_case_id[:8]
                                         )
+                                        # Try to load full NIST state snapshot (richer report).
+                                        nist_snapshot = None
+                                        snapshot_art = next(
+                                            (a for a in artifacts
+                                             if a.get("metadata", {}).get("subtype")
+                                             == "watchguard.nist_case_snapshot"),
+                                            None,
+                                        )
+                                        if snapshot_art:
+                                            try:
+                                                _snap_client = make_client(settings)
+                                                _raw = _snap_client.read_artifact_content(
+                                                    artifact_id=snapshot_art["artifact_id"]
+                                                )
+                                                _snap_client.close()
+                                                nist_snapshot = _raw.get("content", _raw)
+                                            except Exception:
+                                                pass  # fall back to observations-only
                                         case_data_for_report = _build_report_case_data(
                                             case_id=selected_case_id,
                                             workspace_id=ws_from_title,
                                             ddos_results=ddos_results,
                                             created_at=case.get("created_at"),
+                                            nist_snapshot=nist_snapshot,
                                         )
                                         report_bytes = _generate_report_from_context(
                                             case_data_for_report,
