@@ -1232,20 +1232,40 @@ async def run_ddos_investigation(
 
         result = _parse_synthesis_output(synth_result.final_output, nist_case_id)
 
-        # Persist exploratory investigation metadata into the NIST case state so
-        # report-collect can surface it in the generated report.
+        # Persist exploratory investigation metadata AND close out remaining NIST
+        # stages so the case reaches findings_consolidation / READY_FOR_REPORT.
+        # The synthesizer advances one stage (containment_or_monitoring_decision →
+        # mitre_enrichment_optional); we advance the rest deterministically here.
         try:
+            from cai.egs_orchestration.services.case_orchestrator import CaseOrchestrator as _CO
             from cai.tools.workspace.case_state_store import get_default_case_state_store as _gds
             _store = _gds()
             _state = _store.load(nist_case_id)
             if _state is not None:
                 _state.metadata["exploratory_queries_performed"] = result.exploratory_queries_performed
                 _state.metadata["exploratory_findings"] = result.exploratory_findings
+                _orch2 = _CO()
+                _TERMINAL = {"findings_consolidation", None}
+                # Advance through any remaining stages until terminal.
+                _iters = 0
+                while _state.current_stage_id not in _TERMINAL and _iters < 5:
+                    _note = (
+                        "MITRE enrichment skipped — automated pipeline."
+                        if _state.current_stage_id == "mitre_enrichment_optional"
+                        else "Closed by orchestrator post-synthesis."
+                    )
+                    _state = _orch2.advance_stage(_state, note=_note)
+                    _iters += 1
+                # Advance findings_consolidation itself to mark strategy complete.
+                if _state.current_stage_id == "findings_consolidation":
+                    _state = _orch2.advance_stage(
+                        _state, note="Findings consolidation complete — DDoS pipeline finished."
+                    )
                 _store.save(_state)
         except Exception as exc:
             import logging
             logging.getLogger(__name__).warning(
-                "Could not persist exploratory metadata for case %s: %s", nist_case_id, exc
+                "Could not close NIST stages for case %s: %s", nist_case_id, exc
             )
 
         return result
