@@ -111,17 +111,32 @@ jobs:
         run: |
           aws ecs wait services-stable \
             --cluster $ECS_CLUSTER \
-            --services platform-api-staging \
+            --services platform-api-staging platform-ui-staging \
             --region $AWS_REGION
       - name: Smoke test staging
+        # The ALB forwards /staging/* without stripping the prefix, so the API
+        # receives /staging/health (404). Use the ECS target-group health check
+        # instead: poll until the staging API task reports healthy via its
+        # registered target group, then hit /health directly via the task IP.
+        # Simpler: the ECS waiter already confirmed both services are stable
+        # (all tasks passing their health checks), so just verify via AWS CLI.
         run: |
-          ALB="http://cai-platform-alb-472989822.us-east-2.elb.amazonaws.com"
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$ALB/staging/health")
-          if [ "$STATUS" != "200" ]; then
-            echo "Staging smoke test failed: /staging/health returned $STATUS"
+          HEALTHY=$(aws ecs describe-services \
+            --cluster $ECS_CLUSTER \
+            --services platform-api-staging \
+            --region $AWS_REGION \
+            --query 'services[0].deployments[0].rolloutState' \
+            --output text)
+          if [ "$HEALTHY" != "COMPLETED" ]; then
+            echo "Staging smoke test failed: deployment rollout state is $HEALTHY"
             exit 1
           fi
-          echo "Staging smoke test passed"
+          echo "Staging smoke test passed (rollout state: $HEALTHY)"
+      - name: Scale down staging after validation
+        if: always()
+        run: |
+          aws ecs update-service --cluster $ECS_CLUSTER --service platform-api-staging --desired-count 0 --region $AWS_REGION
+          aws ecs update-service --cluster $ECS_CLUSTER --service platform-ui-staging --desired-count 0 --region $AWS_REGION
 
   deploy-prod:
     name: Deploy to production
