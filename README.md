@@ -17,13 +17,15 @@
    - [Tab 1 — WatchGuard S3 Investigation](#tab-1--watchguard-s3-investigation)
    - [Tab 2 — Phishing Investigation](#tab-2--phishing-investigation)
    - [Tab 3 — Monitor de Email (IMAP)](#tab-3--monitor-de-email-imap)
+   - [Tab 4 — Case History](#tab-4--case-history)
 8. [Cómo usar la plataforma (CLI)](#cómo-usar-la-plataforma)
    - [CLI del orquestador](#cli-del-orquestador)
    - [Terminal CAI interactiva](#terminal-cai-interactiva)
    - [Monitor IMAP de phishing](#monitor-imap-de-phishing)
    - [API HTTP directa](#api-http-directa)
 9. [Pipeline WatchGuard S3 (logs a escala)](#pipeline-watchguard-s3-logs-a-escala)
-10. [Investigador multi-agente de phishing](#investigador-multi-agente-de-phishing)
+10. [Pipeline DDoS híbrido](#pipeline-ddos-híbrido)
+11. [Investigador multi-agente de phishing](#investigador-multi-agente-de-phishing)
 11. [Despliegue en producción (AWS)](#despliegue-en-producción-aws)
 12. [Desarrollo y tests](#desarrollo-y-tests)
 13. [Cómo agregar un nuevo backend](#cómo-agregar-un-nuevo-backend)
@@ -379,6 +381,28 @@ El backend detecta automáticamente URLs que ocultan su destino real:
 
 ---
 
+### Tab 4 — Case History
+
+Muestra el historial de casos registrados en platform-api para el `client_id` activo. Permite revisar investigaciones pasadas y exportar informes sin volver a correr el pipeline.
+
+**Qué muestra por caso:**
+- Título, estado (`open` / `completed`), fecha de creación
+- Run asociado: backend, número de observaciones, status (`completed` / `failed`)
+- Artifact de staging: workspace ID, fecha de staging, familias de CSV y total de eventos
+
+**Exportar informe DDoS:**
+
+Si el pipeline DDoS corrió correctamente, el expander **"Exportar Informe DDoS"** está disponible. Usa el artifact `watchguard.nist_case_snapshot` guardado en platform-api para reconstruir el informe completo sin acceso al host donde corrió el pipeline:
+
+1. Seleccionar el caso en el selector
+2. Expandir "Exportar Informe DDoS"
+3. Click en **Generar Informe**
+4. Descargar el PDF generado
+
+El informe incluye decisión de contención, evidencia de las 7 observaciones DuckDB, etapas NIST completadas y findings del synthesizer CAI.
+
+---
+
 ## Cómo usar la plataforma
 
 ### CLI del orquestador
@@ -555,8 +579,84 @@ s3://egslatam-cai-dev/
 | `watchguard_logs.workspace_zip_ingestion` | Predefinida | Ingesta de ZIP local |
 | `watchguard_logs.stage_workspace_zip` | Predefinida | Staging ZIP S3 → CSVs en S3 |
 | `watchguard_logs.duckdb_workspace_analytics` | Predefinida | Agregaciones DuckDB sobre S3 |
-| `watchguard_logs.guarded_filtered_rows` | Guarded (requiere aprobación) | Filas filtradas (requiere approval) |
-| `watchguard_logs.duckdb_workspace_query` | Guarded (requiere aprobación) | Query DuckDB libre (máx 500 filas) |
+| `watchguard_logs.ddos_temporal_analysis` | DDoS | Distribución por día, día peak, patrón |
+| `watchguard_logs.ddos_top_sources` | DDoS | Top IPs origen y segmentos /16 |
+| `watchguard_logs.ddos_top_destinations` | DDoS | Top IPs destino |
+| `watchguard_logs.ddos_segment_analysis` | DDoS | Detalle allow/deny del segmento dominante |
+| `watchguard_logs.ddos_ip_profile` | DDoS | Perfil completo de una IP |
+| `watchguard_logs.ddos_protocol_breakdown` | DDoS | Protocolos por volumen |
+| `watchguard_logs.ddos_hourly_distribution` | DDoS | Distribución horaria del día peak |
+| `watchguard_logs.guarded_filtered_rows` | Guarded | Filas filtradas (requiere aprobación) |
+| `watchguard_logs.duckdb_workspace_query` | Guarded | Query DuckDB libre (máx 500 filas, requiere aprobación) |
+
+---
+
+## Pipeline DDoS híbrido
+
+El pipeline `run-ddos-investigate` investiga un ataque DDoS a partir de un workspace de logs WatchGuard ya subido a S3. Es el flujo principal para análisis de incidentes de gran escala (47M+ eventos).
+
+### Arquitectura del pipeline
+
+```
+Fase 1 — CAI Orchestrator (Haiku)
+  ├─ Encuentra el ZIP más reciente en S3
+  ├─ Crea el caso en platform-api
+  ├─ Inicia el NIST case state (estrategia ddos_nist_v1, etapa: intake_and_scope)
+  └─ Entrega: nist_case_id + run_id + staging_artifact_id
+
+Fase 2 — Determinista (Python puro)
+  └─ 7 observaciones DuckDB en paralelo:
+     ddos_temporal_analysis     → distribución por día y hora
+     ddos_top_sources           → top IPs origen y segmentos /16
+     ddos_top_destinations      → top IPs destino
+     ddos_segment_analysis      → análisis del segmento dominante
+     ddos_ip_profile            → perfil de la IP más activa
+     ddos_protocol_breakdown    → protocolos y puertos
+     ddos_hourly_distribution   → distribución horaria del día peak
+
+Fase 3 — CAI Synthesizer (Haiku)
+  ├─ Lee las 7 observaciones
+  ├─ Ejecuta hasta 5 queries exploratorias adicionales
+  └─ Produce veredicto JSON:
+     { severity, confidence, containment_decision, evidence_summary, ... }
+
+Post-síntesis (Python)
+  ├─ Avanza etapas NIST: mitre_enrichment_optional → findings_consolidation
+  ├─ Completa el run en platform-api (status: completed)
+  └─ Persiste el NIST case state como artifact watchguard.nist_case_snapshot
+```
+
+### Ejecutar desde CLI
+
+```bash
+# 1. Subir el ZIP de logs a S3 (si no está ya)
+make upload-workspace ZIP=OneDrive_1_24-2-2026.zip WORKSPACE=OneDrive_1_24-2-2026
+
+# 2. Correr el pipeline completo
+set -a && . .env && set +a
+python3 -m cai_orchestrator run-ddos-investigate \
+  --workspace-id OneDrive_1_24-2-2026
+```
+
+### Ejecutar desde la UI
+
+En la UI, tab **WatchGuard S3 Investigation**, seleccionar el workspace y hacer click en **"Lanzar análisis CAI completo"**. El pipeline corre en background — la UI muestra el progreso y permite seguir usando otros tabs mientras espera.
+
+### Observaciones DDoS disponibles (`watchguard_logs`)
+
+| Operación | Descripción |
+|---|---|
+| `watchguard_logs.ddos_temporal_analysis` | Distribución de eventos por día, día peak, patrón horario |
+| `watchguard_logs.ddos_top_sources` | Top IPs origen y segmentos /16 por volumen |
+| `watchguard_logs.ddos_top_destinations` | Top IPs destino (ej. DNS, balanceadores) |
+| `watchguard_logs.ddos_segment_analysis` | Detalle de tráfico allow/deny para el segmento dominante |
+| `watchguard_logs.ddos_ip_profile` | Perfil completo de una IP: eventos, políticas, destinos |
+| `watchguard_logs.ddos_protocol_breakdown` | Protocolos y puertos ordenados por volumen |
+| `watchguard_logs.ddos_hourly_distribution` | Distribución hora a hora para la fecha peak |
+
+### Costo típico
+
+Un run completo sobre 47M de eventos (47 GB de logs) cuesta aproximadamente **$0.43 USD** en tokens Bedrock (Claude 3.5 Haiku) y menos de $0.01 en S3/DuckDB.
 
 ---
 

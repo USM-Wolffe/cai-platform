@@ -1,4 +1,6 @@
-# Plan: Pipeline multi-agente de investigación DDoS
+# Plan histórico: Pipeline multi-agente de investigación DDoS
+
+> **Este documento es el plan de diseño original** escrito antes de la implementación. La arquitectura real difiere en varios aspectos — en particular la gestión del estado compartido usa `cai.egs_orchestration` (NIST case state local + snapshot en platform-api), no el artifact JSON `InvestigationState` descrito aquí. Para la implementación real ver `apps/cai-orchestrator/src/cai_orchestrator/ddos_agents.py`.
 
 Objetivo final: a partir de un `workspace_id` (ZIP de logs WatchGuard ya subido a S3), el pipeline produce automáticamente un informe LaTeX siguiendo NIST SP 800-61, equivalente al informe manual [`docs/reference/LL-IR-PFALIMENTOS_23-10-25.pdf`](../reference/LL-IR-PFALIMENTOS_23-10-25.pdf).
 

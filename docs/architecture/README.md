@@ -119,14 +119,35 @@ cai-orchestrator
 ## Runtime en producción (AWS)
 
 ```
-Internet → ALB → ECS Fargate → platform-api
-                                    ↓
-                              RDS PostgreSQL
+Internet → ALB → ECS Fargate → platform-api  →  RDS PostgreSQL
+               ↘ ECS Fargate → platform-ui   →  platform-api (vía ALB)
+                                platform-ui   →  Amazon Bedrock (agentes CAI)
+                                platform-ui   →  S3 (logs WatchGuard)
 
-cai-orchestrator (EC2 host-run) → HTTP → ALB → platform-api
+cai-orchestrator (host-run) → HTTP → ALB → platform-api
 ```
 
-- `platform-api` es el único servicio containerizado.
-- `cai-orchestrator` corre en el host (EC2) como CLI.
-- El API es stateless; todo el estado está en PostgreSQL.
+- `platform-api` y `platform-ui` son los servicios containerizados en ECS.
+- `platform-ui` embebe el `cai-orchestrator` — los agentes CAI corren dentro del contenedor de la UI.
+- `cai-orchestrator` también puede correrse como CLI standalone en cualquier host con Python.
+- El API es stateless; todo el estado persiste en PostgreSQL.
 - Las credenciales de BD vienen de AWS Secrets Manager.
+
+## Pipeline DDoS híbrido
+
+El pipeline `run-ddos-investigate` tiene tres fases:
+
+```
+Fase 1 — CAI Orchestrator (LLM)
+  └─ Encuentra el ZIP en S3, crea el caso, inicia el NIST case state local
+
+Fase 2 — Determinista (Python + DuckDB)
+  └─ 7 observaciones fijas: temporal analysis, top sources, top destinations,
+     segment analysis, IP profile, protocol breakdown, hourly distribution
+
+Fase 3 — CAI Synthesizer (LLM)
+  └─ Lee todas las observaciones, corre hasta 5 queries exploratorias libres,
+     produce el veredicto JSON: severidad, decisión de contención, evidencia
+```
+
+El estado NIST (estrategia `ddos_nist_v1`, 5 etapas) vive en `~/.egs_cases/` durante la ejecución y se serializa al finalizar como artifact `watchguard.nist_case_snapshot` en platform-api. La UI usa ese snapshot para generar informes sin acceso al host donde corrió el pipeline.

@@ -115,21 +115,25 @@ Observaciones expuestas hoy:
 
 Subcomandos CLI actuales:
 
-- `run-watchguard`
-- `run-watchguard-filter-denied`
-- `run-watchguard-analytics-basic`
-- `run-watchguard-top-talkers-basic`
-- `run-watchguard-guarded-query`
-- `run-phishing-email-basic-assessment`
-- `run-phishing-monitor`
-- `run-phishing-investigate`
-- `run-cai-terminal`
-- `run-ddos-investigate`
-- `report-collect`
-- `report-generate`
-- `get-run-status`
-- `list-run-artifacts`
-- `read-artifact-content`
+| Subcomando | Descripción |
+|---|---|
+| `run-watchguard` | Análisis básico de logs WatchGuard (normalización + resumen) |
+| `run-watchguard-filter-denied` | Filtrado de eventos denegados |
+| `run-watchguard-analytics-basic` | Bundle de analytics básico |
+| `run-watchguard-top-talkers-basic` | Top IPs por tráfico |
+| `run-watchguard-guarded-query` | Query guarded con aprobación explícita |
+| `run-phishing-email-basic-assessment` | Evaluación heurística de un email de phishing |
+| `run-phishing-monitor` | Loop IMAP: monitorea un buzón y analiza emails reenviados |
+| `run-phishing-investigate` | Pipeline multi-agente de phishing sobre un payload |
+| `run-cai-terminal` | Terminal interactiva con el agente `egs-analist` |
+| `run-ddos-investigate` | Pipeline híbrido DDoS de 3 fases sobre un workspace S3 |
+| `run-blueteam-investigate` | Pipeline de investigación blue team sobre logs multi-fuente |
+| `run-log-monitor` | Monitor de logs en tiempo real |
+| `report-collect` | Recolecta artifacts de un caso para un informe |
+| `report-generate` | Genera informe PDF/HTML a partir de artifacts recolectados |
+| `get-run-status` | Consulta el estado de un run por ID |
+| `list-run-artifacts` | Lista los artifacts de un run |
+| `read-artifact-content` | Lee el contenido de un artifact |
 
 ## 6. Flujo de datos
 
@@ -154,14 +158,18 @@ Subcomandos CLI actuales:
 ### `watchguard_logs`
 
 - Inputs: logs CSV pequeños o referencias `workspace_s3_zip`
-- Outputs: observaciones clásicas, analytics sobre staging S3 y pipeline DDoS
-- Queries guarded: filtrado en memoria y query DuckDB sobre staging S3
+- Outputs:
+  - Clásicas: `normalize_and_summarize`, `filter_denied_events`, `analytics_bundle_basic`, `top_talkers_basic`, `workspace_zip_ingestion`
+  - S3/DuckDB: `stage_workspace_zip`, `duckdb_workspace_analytics`
+  - DDoS: `ddos_temporal_analysis`, `ddos_top_sources`, `ddos_top_destinations`, `ddos_segment_analysis`, `ddos_ip_profile`, `ddos_protocol_breakdown`, `ddos_hourly_distribution`
+- Queries guarded: `guarded_filtered_rows`, `duckdb_workspace_query`
+- Artifact especial: `watchguard.nist_case_snapshot` — serialización del estado NIST completo (decisiones, evidencia, etapas) para consumo de la UI sin acceso al host local
 
 ### `phishing_email`
 
 - Inputs: payload JSON de email o `.eml` parseado por el orquestador
-- Outputs: `basic_assessment` y `header_analysis`
-- Uso extendido: pipeline multi-agente en `phishing_agents.py`
+- Outputs: `basic_assessment`, `header_analysis`
+- Uso extendido: pipeline multi-agente en `phishing_agents.py` (triage → especialistas → síntesis)
 
 ## 9. Tests
 

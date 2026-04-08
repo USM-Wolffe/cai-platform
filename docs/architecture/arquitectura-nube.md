@@ -55,8 +55,8 @@ Hay cuatro servicios ECS en el cluster:
 - **AWS credentials:** no se inyectan explícitamente — usa el IAM Task Role vía IMDS (Instance Metadata Service)
 
 ##### `platform-api-staging` y `platform-ui-staging`
-- Mismas imágenes que producción, apuntando a la base de datos `caiplatform_staging`
-- Desired count = 0 en reposo; el CI/CD los levanta en cada push a `main`
+- Mismas imágenes que producción. La API staging corre **in-memory** (sin `DATABASE_URL`) para no requerir conectividad a RDS desde la red de CI. La UI staging usa la misma configuración que producción.
+- Desired count = 0 en reposo; el CI/CD los levanta en cada push a `main`, valida estabilidad y los vuelve a escalar a 0.
 - Accesibles via ALB en paths `/staging/*` y `/staging-ui/*`
 
 ---
@@ -237,10 +237,13 @@ Developer hace push a main en GitHub
         → Job deploy-staging:
             → ECS UpdateService platform-api-staging (desired=1, force new deployment)
             → ECS UpdateService platform-ui-staging (desired=1, force new deployment)
-            → Smoke test: curl ALB/staging/health → 200
-        → Job deploy-prod (solo en releases/tags):
+            → Espera services-stable (ambos servicios)
+            → Smoke test: verifica deployments[0].rolloutState == COMPLETED
+            → ECS UpdateService (desired=0) en ambos servicios de staging
+        → Job deploy-prod (en cada push a main, tras staging OK):
             → ECS UpdateService platform-api (force new deployment)
             → ECS UpdateService platform-ui (desired=1)
+            → Espera services-stable
             → Smoke test: curl ALB/health → 200
 ```
 
@@ -455,7 +458,7 @@ Cuando un desarrollador termina una mejora y la sube al repositorio de código (
 3. Se sube al almacén de versiones (ECR)
 4. Se despliega en el entorno de pruebas (staging) primero
 5. Se verifica que el entorno de pruebas responde correctamente
-6. Solo cuando hay una versión oficial etiquetada, se despliega en producción
+6. Si todo pasa, se despliega automáticamente en producción
 
 Es como un **proceso de control de calidad automatizado** que asegura que nada malo llega a los analistas sin haber sido probado antes.
 
