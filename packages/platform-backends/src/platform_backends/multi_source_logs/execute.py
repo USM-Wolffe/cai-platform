@@ -20,6 +20,7 @@ from platform_contracts import (
 from platform_core import ContractViolationError
 
 from platform_backends.multi_source_logs.descriptor import (
+    MULTI_SOURCE_LOGS_ACTIVE_THREATS_OPERATION,
     MULTI_SOURCE_LOGS_BACKEND_ID,
     MULTI_SOURCE_LOGS_CROSS_SOURCE_OPERATION,
     MULTI_SOURCE_LOGS_DNS_ANOMALY_OPERATION,
@@ -30,6 +31,7 @@ from platform_backends.multi_source_logs.descriptor import (
 )
 from platform_backends.multi_source_logs.detections import (
     correlate_cross_source,
+    detect_active_threats,
     detect_dns_anomaly,
     detect_failed_auth,
     detect_lateral_movement,
@@ -47,6 +49,7 @@ from platform_backends.multi_source_logs.models import (
 from platform_backends.multi_source_logs.normalizer import (
     VALID_SOURCE_TYPES,
     download_s3_lines,
+    download_staging_lines,
     normalize_log_lines,
 )
 
@@ -104,6 +107,14 @@ def execute_predefined_observation(
                 run=run,
                 input_payload=input_payload,
                 observation_request=observation_request,
+            )
+        if op == MULTI_SOURCE_LOGS_ACTIVE_THREATS_OPERATION:
+            return _execute_detection(
+                run=run,
+                input_payload=input_payload,
+                observation_request=observation_request,
+                detect_fn=detect_active_threats,
+                operation=op,
             )
         raise UnsupportedMultiSourceLogsOperationError(
             f"Unknown operation_kind: '{op}' for backend '{MULTI_SOURCE_LOGS_BACKEND_ID}'"
@@ -396,8 +407,23 @@ def _parse_input_payload(input_payload: object) -> tuple[str, list[str]]:
             raise MultiSourceLogsBackendError(f"s3_uri must be a valid S3 URI, got '{s3_uri}'")
         return source_type, download_s3_lines(s3_uri)
 
+    if "staging_prefix" in input_payload:
+        staging_prefix = input_payload["staging_prefix"]
+        bucket = input_payload.get("bucket", "")
+        region = input_payload.get("region", "us-east-2")
+        if not isinstance(staging_prefix, str) or not staging_prefix:
+            raise MultiSourceLogsBackendError(f"staging_prefix must be a non-empty string, got '{staging_prefix}'")
+        if not bucket:
+            raise MultiSourceLogsBackendError("staging_prefix input requires 'bucket' field")
+        return source_type, download_staging_lines(
+            staging_prefix=staging_prefix,
+            source_type=source_type,
+            bucket=bucket,
+            region=region,
+        )
+
     raise MultiSourceLogsBackendError(
-        "input_payload must include either 's3_uri' or 'raw_log_lines'"
+        "input_payload must include 's3_uri', 'staging_prefix', or 'raw_log_lines'"
     )
 
 

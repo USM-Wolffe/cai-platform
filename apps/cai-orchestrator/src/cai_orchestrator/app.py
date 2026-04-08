@@ -433,8 +433,7 @@ def _run_blueteam_investigate_command(args: argparse.Namespace) -> int:
     try:
         result = asyncio.run(
             run_blueteam_investigation(
-                s3_uri=args.s3_uri,
-                source_type=args.source_type,
+                workspace_id=args.workspace_id,
                 client_id=args.client_id,
                 platform_api_base_url=api_base_url,
                 model=model,
@@ -470,7 +469,6 @@ def _run_log_monitor_command(args: argparse.Namespace) -> int:
     import os
     import time
 
-    from cai_orchestrator.blueteam_agents import run_blueteam_investigation
     from cai_orchestrator.log_monitor import (
         LogMonitorConfigError,
         LogMonitorSettings,
@@ -513,27 +511,14 @@ def _run_log_monitor_command(args: argparse.Namespace) -> int:
             print(json.dumps({"status": "no_new_files"}))
         else:
             for log_ref in new_files:
-                print(json.dumps({"status": "processing", "s3_uri": log_ref.s3_uri}))
-                try:
-                    result = asyncio.run(
-                        run_blueteam_investigation(
-                            s3_uri=log_ref.s3_uri,
-                            source_type=log_ref.source_type,
-                            client_id=args.client_id,
-                            platform_api_base_url=api_base_url,
-                            model=model,
-                        )
-                    )
-                    if hasattr(result, "model_dump"):
-                        print(json.dumps(result.model_dump(), indent=2, sort_keys=True))
-                    else:
-                        print(result)
-                except MissingCaiDependencyError as exc:
-                    _print_error({"error": {"type": "missing_cai_dependency", "message": str(exc)}})
-                    if run_once:
-                        return 1
-                except Exception as exc:  # noqa: BLE001
-                    _print_error({"error": {"type": "investigation_failed", "s3_uri": log_ref.s3_uri, "message": str(exc)}})
+                print(json.dumps({
+                    "status": "skipped",
+                    "s3_uri": log_ref.s3_uri,
+                    "reason": (
+                        "run-log-monitor requires workspace-based WatchGuard logs. "
+                        "Use run-blueteam-investigate --workspace-id instead."
+                    ),
+                }))
 
         if run_once:
             return 0
@@ -1044,18 +1029,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     blueteam_investigate = subparsers.add_parser(
         "run-blueteam-investigate",
-        help="Run the hybrid blue team investigation pipeline over a log file in S3 (requires CAI extra + platform-api running).",
+        help="Run the hybrid blue team investigation pipeline over a staged WatchGuard workspace (requires CAI extra + platform-api running).",
     )
     blueteam_investigate.add_argument(
-        "--s3-uri",
+        "--workspace-id",
         required=True,
-        help="S3 URI of the log file to investigate (e.g. s3://my-bucket/logs/auth.log).",
-    )
-    blueteam_investigate.add_argument(
-        "--source-type",
-        required=True,
-        choices=["windows_events", "linux_auth", "dns_logs", "firewall_csv", "web_proxy"],
-        help="Log source type.",
+        help="WatchGuard workspace ID (e.g. logs-ejemplo-ddos). The workspace must be uploaded to S3 first.",
     )
     blueteam_investigate.add_argument(
         "--client-id",

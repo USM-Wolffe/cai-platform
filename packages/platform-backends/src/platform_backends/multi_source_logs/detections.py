@@ -377,6 +377,75 @@ def detect_dns_anomaly(records: list[NormalizedLogRecord]) -> list[MultiSourceDe
     return findings
 
 
+# ── Active threat detection (WatchGuard alarms) ───────────────────────────────
+
+_ALARM_TYPE_TO_CATEGORY = {
+    "udp_flood_dos": "flood",
+    "ddos_attack_src_dos": "ddos",
+    "ip_scan_dos": "scanning",
+    "Block-Site-Notif": "blocklist",
+}
+
+
+def detect_active_threats(records: list[NormalizedLogRecord]) -> list[MultiSourceDetectionFinding]:
+    """Detect active network threats from WatchGuard alarm events.
+
+    Processes records with event_type='threat_alert' (parsed from alarm CSVs).
+    Groups alarms by type to surface:
+    - Flood: udp_flood_dos events
+    - DDoS: ddos_attack_src_dos events
+    - Port scanning: ip_scan_dos events
+    - Blocked sites: Block-Site-Notif events
+    """
+    import json as _json
+
+    findings: list[MultiSourceDetectionFinding] = []
+    alarm_records = [r for r in records if r.event_type == "threat_alert"]
+    if not alarm_records:
+        return findings
+
+    # Group by alarm_type
+    by_type: dict[str, list[NormalizedLogRecord]] = defaultdict(list)
+    for r in alarm_records:
+        try:
+            details = _json.loads(r.details_json)
+            alarm_type = details.get("alarm_type", "unknown")
+        except Exception:
+            alarm_type = "unknown"
+        by_type[alarm_type].append(r)
+
+    # Collect attacker IPs per alarm type
+    ip_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for alarm_type, recs in by_type.items():
+        for r in recs:
+            if r.source_ip:
+                ip_counts[alarm_type][r.source_ip] += 1
+
+    for alarm_type, recs in by_type.items():
+        category = _ALARM_TYPE_TO_CATEGORY.get(alarm_type, "threat")
+        severity = "critical" if alarm_type in ("ddos_attack_src_dos", "udp_flood_dos") else "high"
+        top_ips = sorted(ip_counts[alarm_type].items(), key=lambda x: -x[1])[:5]
+        findings.append(MultiSourceDetectionFinding(
+            rule_id=f"active_threat_{alarm_type}",
+            category=category,
+            severity=severity,
+            count=len(recs),
+            evidence={
+                "alarm_type": alarm_type,
+                "event_count": len(recs),
+                "top_source_ips": [{"ip": ip, "events": cnt} for ip, cnt in top_ips],
+            },
+            summary=(
+                f"Active threat detected: {alarm_type} — {len(recs)} alarm event(s). "
+                f"Top source: {top_ips[0][0]} ({top_ips[0][1]} events)."
+                if top_ips else
+                f"Active threat detected: {alarm_type} — {len(recs)} alarm event(s)."
+            ),
+        ))
+
+    return findings
+
+
 # ── Cross-source correlation ──────────────────────────────────────────────────
 
 def correlate_cross_source(

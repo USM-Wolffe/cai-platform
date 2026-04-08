@@ -504,6 +504,18 @@ class PlatformApiClient:
             payload["input_artifact_id"] = input_artifact_id
         return self._request("POST", f"/runs/{run_id}/observations/multi-source-logs-dns-anomaly-detect", json=payload)
 
+    def execute_multi_source_logs_active_threats_detect(
+        self,
+        *,
+        run_id: str,
+        requested_by: str,
+        input_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"requested_by": requested_by}
+        if input_artifact_id is not None:
+            payload["input_artifact_id"] = input_artifact_id
+        return self._request("POST", f"/runs/{run_id}/observations/multi-source-logs-active-threats-detect", json=payload)
+
     def execute_multi_source_logs_cross_source_correlate(
         self,
         *,

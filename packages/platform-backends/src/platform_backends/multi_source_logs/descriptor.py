@@ -21,6 +21,7 @@ MULTI_SOURCE_LOGS_LATERAL_MOVEMENT_OPERATION = "multi_source_logs.lateral_moveme
 MULTI_SOURCE_LOGS_PRIV_ESC_OPERATION         = "multi_source_logs.privilege_escalation_detect"
 MULTI_SOURCE_LOGS_DNS_ANOMALY_OPERATION      = "multi_source_logs.dns_anomaly_detect"
 MULTI_SOURCE_LOGS_CROSS_SOURCE_OPERATION     = "multi_source_logs.cross_source_correlate"
+MULTI_SOURCE_LOGS_ACTIVE_THREATS_OPERATION   = "multi_source_logs.active_threats_detect"
 
 
 def get_multi_source_logs_backend_descriptor() -> BackendDescriptor:
@@ -61,6 +62,7 @@ def get_multi_source_logs_backend_descriptor() -> BackendDescriptor:
             MULTI_SOURCE_LOGS_PRIV_ESC_OPERATION,
             MULTI_SOURCE_LOGS_DNS_ANOMALY_OPERATION,
             MULTI_SOURCE_LOGS_CROSS_SOURCE_OPERATION,
+            MULTI_SOURCE_LOGS_ACTIVE_THREATS_OPERATION,
         ],
         accepted_artifact_kinds=[ArtifactKind.INPUT],
         produced_artifact_kinds=[ArtifactKind.NORMALIZED, ArtifactKind.ANALYSIS_OUTPUT],

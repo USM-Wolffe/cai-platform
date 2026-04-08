@@ -1,6 +1,7 @@
 """Multi-source logs backend for defensive log analysis without a SIEM."""
 
 from platform_backends.multi_source_logs.descriptor import (
+    MULTI_SOURCE_LOGS_ACTIVE_THREATS_OPERATION,
     MULTI_SOURCE_LOGS_BACKEND_ID,
     MULTI_SOURCE_LOGS_BACKEND_TYPE,
     MULTI_SOURCE_LOGS_CROSS_SOURCE_OPERATION,
@@ -25,6 +26,7 @@ from platform_backends.multi_source_logs.models import (
 )
 
 __all__ = [
+    "MULTI_SOURCE_LOGS_ACTIVE_THREATS_OPERATION",
     "MULTI_SOURCE_LOGS_BACKEND_ID",
     "MULTI_SOURCE_LOGS_BACKEND_TYPE",
     "MULTI_SOURCE_LOGS_CROSS_SOURCE_OPERATION",

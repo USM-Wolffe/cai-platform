@@ -16,6 +16,7 @@ from platform_api.schemas import (
     serialize_run_status,
 )
 from platform_backends.multi_source_logs import (
+    MULTI_SOURCE_LOGS_ACTIVE_THREATS_OPERATION,
     MULTI_SOURCE_LOGS_BACKEND_ID,
     MULTI_SOURCE_LOGS_CROSS_SOURCE_OPERATION,
     MULTI_SOURCE_LOGS_DNS_ANOMALY_OPERATION,
@@ -440,6 +441,21 @@ def execute_multi_source_logs_dns_anomaly_detect_endpoint(
         runtime=runtime,
         backend_id=MULTI_SOURCE_LOGS_BACKEND_ID,
         operation_kind=MULTI_SOURCE_LOGS_DNS_ANOMALY_OPERATION,
+    )
+
+
+@router.post("/{run_id}/observations/multi-source-logs-active-threats-detect", response_model=None)
+def execute_multi_source_logs_active_threats_detect_endpoint(
+    run_id: str,
+    request: ExecuteObservationRequest = Body(default_factory=ExecuteObservationRequest),
+    runtime: AppRuntime = Depends(get_runtime),
+) -> object:
+    return _run_observation(
+        run_id=run_id,
+        request_body=request,
+        runtime=runtime,
+        backend_id=MULTI_SOURCE_LOGS_BACKEND_ID,
+        operation_kind=MULTI_SOURCE_LOGS_ACTIVE_THREATS_OPERATION,
     )
 
 

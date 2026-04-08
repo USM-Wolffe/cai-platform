@@ -18,6 +18,8 @@ VALID_SOURCE_TYPES = frozenset({
     "dns_logs",
     "firewall_csv",
     "web_proxy",
+    "watchguard_traffic",
+    "watchguard_alarm",
 })
 
 
@@ -33,6 +35,8 @@ def normalize_log_lines(source_type: str, lines: list[str]) -> list[NormalizedLo
         "dns_logs": _parse_dns_logs,
         "firewall_csv": _parse_firewall_csv,
         "web_proxy": _parse_web_proxy,
+        "watchguard_traffic": _parse_watchguard_traffic,
+        "watchguard_alarm": _parse_watchguard_alarm,
     }
     return parsers[source_type](lines)
 
@@ -314,6 +318,211 @@ def _parse_web_proxy(lines: list[str]) -> list[NormalizedLogRecord]:
             details_json=json.dumps({"uri": uri[:300], "method": method, "action": action}),
         ))
     return records
+
+
+# ── WatchGuard Traffic CSV ────────────────────────────────────────────────────
+
+# Positional columns (no headers):
+# 0=timestamp, 1=event_subtype(FWAllow/FWDeny/FWAllowEnd), 5=action(Allow/Deny),
+# 8=protocol(dns/udp/https/tcp), 11=src_ip, 12=src_port, 13=dst_ip, 14=dst_port,
+# 21=dns_type, 22=dns_domain
+
+_WG_IP_RE = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b")
+
+
+def _parse_watchguard_traffic(lines: list[str]) -> list[NormalizedLogRecord]:
+    """Parse WatchGuard traffic CSV (positional, no header row)."""
+    records: list[NormalizedLogRecord] = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        cols = line.split(",")
+        if len(cols) < 14:
+            continue
+        ts_raw = cols[0].strip()
+        event_subtype = cols[1].strip() if len(cols) > 1 else ""
+        action = cols[5].strip() if len(cols) > 5 else ""
+        protocol = cols[8].strip().lower() if len(cols) > 8 else ""
+        src_ip = cols[11].strip() if len(cols) > 11 else None
+        src_port = cols[12].strip() if len(cols) > 12 else None
+        dst_ip = cols[13].strip() if len(cols) > 13 else None
+        dst_port = cols[14].strip() if len(cols) > 14 else None
+        dns_domain = cols[22].strip() if len(cols) > 22 else None
+
+        ts_iso = _normalize_timestamp(ts_raw)
+
+        # Map event_subtype/protocol to event_type understood by detection algorithms:
+        # - dns queries → dns_query (picked up by detect_dns_anomaly)
+        # - FWDeny/Deny → failed_logon (picked up by detect_failed_auth for flood detection)
+        # - FWAllow/Allow → logon (picked up by detect_lateral_movement for scanning)
+        if protocol == "dns" and dns_domain:
+            event_type = "dns_query"
+        elif event_subtype == "FWDeny" or action.lower() == "deny":
+            event_type = "failed_logon"
+        elif event_subtype in ("FWAllow", "FWAllowEnd") or action.lower() == "allow":
+            event_type = "logon"
+        else:
+            event_type = "unknown"
+
+        details: dict[str, object] = {
+            "event_subtype": event_subtype,
+            "protocol": protocol,
+            "src_port": src_port,
+            "dst_port": dst_port,
+            "action": action,
+        }
+        if dns_domain:
+            details["domain"] = dns_domain
+            details["query_type"] = cols[21].strip() if len(cols) > 21 else None
+
+        records.append(NormalizedLogRecord(
+            timestamp=ts_iso,
+            event_type=event_type,
+            source_host=None,
+            dest_host=None,
+            source_ip=src_ip or None,
+            dest_ip=dst_ip or None,
+            user=None,
+            action=action or None,
+            status=None,
+            process_name=None,
+            details_json=json.dumps(details),
+        ))
+    return records
+
+
+# ── WatchGuard Alarm CSV ──────────────────────────────────────────────────────
+
+# Positional columns (no headers):
+# 0=timestamp, 10=alarm_type(udp_flood_dos/ddos_attack_src_dos/ip_scan_dos/Block-Site-Notif),
+# 13=description(free text — may contain IP addresses)
+
+def _parse_watchguard_alarm(lines: list[str]) -> list[NormalizedLogRecord]:
+    """Parse WatchGuard alarm CSV (positional, no header row)."""
+    records: list[NormalizedLogRecord] = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        cols = line.split(",")
+        if len(cols) < 11:
+            continue
+        ts_raw = cols[0].strip()
+        alarm_type = cols[10].strip() if len(cols) > 10 else "unknown"
+        description = cols[13].strip() if len(cols) > 13 else ""
+
+        ts_iso = _normalize_timestamp(ts_raw)
+
+        # Extract IPs from the free-text description field
+        extracted_ips = _WG_IP_RE.findall(description)
+
+        details: dict[str, object] = {
+            "alarm_type": alarm_type,
+            "description": description[:300],
+            "extracted_ips": extracted_ips[:10],
+        }
+
+        records.append(NormalizedLogRecord(
+            timestamp=ts_iso,
+            event_type="threat_alert",
+            source_host=None,
+            dest_host=None,
+            source_ip=extracted_ips[0] if extracted_ips else None,
+            dest_ip=extracted_ips[1] if len(extracted_ips) > 1 else None,
+            user=None,
+            action=alarm_type,
+            status=None,
+            process_name=None,
+            details_json=json.dumps(details),
+        ))
+    return records
+
+
+# ── Staged S3 workspace reader ────────────────────────────────────────────────
+
+def download_staging_lines(
+    staging_prefix: str,
+    source_type: str,
+    bucket: str,
+    region: str,
+    max_rows: int = 50_000,
+) -> list[str]:
+    """Read log lines from a staged WatchGuard S3 workspace.
+
+    For watchguard_traffic: uses DuckDB to sample up to max_rows rows from
+    all CSVs under {staging_prefix}/traffic/ (files can be 300 MB+ each).
+    For watchguard_alarm: reads all CSVs under {staging_prefix}/alarm/ via
+    boto3 (files are typically < 1 MB).
+
+    Returns raw CSV lines (no header) as a list of strings.
+    """
+    try:
+        import boto3
+    except ImportError as exc:
+        raise MultiSourceLogsBackendError(
+            "boto3 is required to read staged workspace data from S3."
+        ) from exc
+
+    s3 = boto3.client("s3", region_name=region)
+
+    if source_type == "watchguard_traffic":
+        return _download_traffic_staging(s3, staging_prefix, bucket, region, max_rows)
+    elif source_type == "watchguard_alarm":
+        return _download_alarm_staging(s3, staging_prefix, bucket)
+    else:
+        raise MultiSourceLogsBackendError(
+            f"download_staging_lines only supports watchguard_traffic and watchguard_alarm, "
+            f"got '{source_type}'"
+        )
+
+
+def _download_traffic_staging(s3, staging_prefix: str, bucket: str, region: str, max_rows: int) -> list[str]:
+    """Sample traffic CSV lines from staged workspace using DuckDB."""
+    try:
+        import duckdb
+    except ImportError as exc:
+        raise MultiSourceLogsBackendError(
+            "duckdb is required to read staged traffic data. Install it or use raw_log_lines."
+        ) from exc
+
+    s3_glob = f"s3://{bucket}/{staging_prefix}/traffic/*.csv"
+    con = duckdb.connect()
+    try:
+        con.execute("INSTALL httpfs; LOAD httpfs;")
+        con.execute(f"SET s3_region='{region}';")
+        # Read positional columns; DuckDB auto-detects no-header CSV
+        result = con.execute(
+            f"SELECT * FROM read_csv_auto('{s3_glob}', header=false, "
+            f"ignore_errors=true) LIMIT {max_rows}"
+        ).fetchall()
+    except Exception as exc:
+        raise MultiSourceLogsBackendError(
+            f"DuckDB failed to read traffic CSV from {s3_glob}: {exc}"
+        ) from exc
+    finally:
+        con.close()
+
+    # Re-encode rows back to CSV strings (matching the positional format the parser expects)
+    lines: list[str] = []
+    for row in result:
+        lines.append(",".join("" if v is None else str(v) for v in row))
+    return lines
+
+
+def _download_alarm_staging(s3, staging_prefix: str, bucket: str) -> list[str]:
+    """Read all alarm CSV lines from staged workspace via boto3."""
+    prefix = f"{staging_prefix}/alarm/"
+    paginator = s3.get_paginator("list_objects_v2")
+    lines: list[str] = []
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            if not key.endswith(".csv"):
+                continue
+            body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+            lines.extend(body.decode("utf-8", errors="replace").splitlines())
+    return lines
 
 
 # ── Timestamp helpers ─────────────────────────────────────────────────────────
