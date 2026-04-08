@@ -1271,12 +1271,14 @@ async def run_ddos_investigation(
             ),
         )
 
-        # Defensive: if the agent forgot to call complete_run_tool, close the run
-        # ourselves and log a warning. complete_run is idempotent in platform-core.
+        # Defensive: if the agent forgot to call complete_run_tool, close the run.
+        # complete_run only accepts CREATED/RUNNING → skip if already terminal.
         # get_run_status returns {"run": {"status": ...}, ...} — status is nested.
+        _TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
         try:
             run_status = client.get_run_status(run_id=run_id)
-            if run_status.get("run", {}).get("status") != "completed":
+            _current_status = run_status.get("run", {}).get("status")
+            if _current_status not in _TERMINAL_STATUSES:
                 import logging
                 logging.getLogger(__name__).warning(
                     "ddos-synthesizer did not call complete_run_tool; closing run %s defensively.",
@@ -1286,6 +1288,11 @@ async def run_ddos_investigation(
                     run_id=run_id,
                     requested_by="ddos_investigation_fallback",
                     reason="Synthesizer did not close run; closed by orchestrator fallback.",
+                )
+            elif _current_status != "completed":
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Run %s ended in terminal status '%s' (not completed).", run_id, _current_status
                 )
         except Exception as exc:
             import logging
@@ -1328,9 +1335,16 @@ async def run_ddos_investigation(
 
                 # Persist full NIST case state as a platform-api artifact so the UI
                 # can generate complete reports without access to .egs_cases/.
+                # nist_case_id is the LOCAL store ID — the platform-api case ID is
+                # different; look it up from the run's case_ref.
                 try:
+                    _run_info = client.get_run(run_id=run_id)
+                    _platform_case_id = (
+                        (_run_info.get("run", {}).get("case_ref") or {}).get("id")
+                        or nist_case_id
+                    )
                     client.attach_input_artifact(
-                        case_id=nist_case_id,
+                        case_id=_platform_case_id,
                         payload=_state.model_dump(mode="json"),
                         format="json",
                         summary="NIST case state snapshot (decisiones + evidencia + etapas)",

@@ -157,7 +157,10 @@ def complete_run(
 
     if run.status == RunStatus.COMPLETED:
         return case, run
-    if run.status not in {RunStatus.CREATED, RunStatus.RUNNING}:
+    # Allow completing a FAILED run: optional observations (Phase 3 explore tools)
+    # can fail and transition the run to FAILED, but the pipeline still produces a
+    # valid result. Completing overrides the failed status with the final outcome.
+    if run.status not in {RunStatus.CREATED, RunStatus.RUNNING, RunStatus.FAILED}:
         raise InvalidStateError(
             f"run '{run.run_id}' cannot be completed from status '{run.status.value}'"
         )
