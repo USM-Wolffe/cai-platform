@@ -38,6 +38,7 @@ def _build_postgres_runtime(database_url: str) -> AppRuntime:
     )
     from platform_backends.watchguard_logs import get_watchguard_logs_backend_descriptor
     from platform_backends.phishing_email import get_phishing_email_backend_descriptor
+    from platform_backends.multi_source_logs import get_multi_source_logs_backend_descriptor
 
     init_pool(database_url)
     apply_schema()
@@ -50,6 +51,7 @@ def _build_postgres_runtime(database_url: str) -> AppRuntime:
             [
                 get_watchguard_logs_backend_descriptor(),
                 get_phishing_email_backend_descriptor(),
+                get_multi_source_logs_backend_descriptor(),
             ]
         ),
         approval_policy=DevelopmentApprovalPolicy(),

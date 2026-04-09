@@ -57,7 +57,7 @@ jobs:
           docker push $ECR_API_URI:latest
 
   build-and-push-ui:
-    name: Build & push platform-ui
+    name: Build & push platform-ui (Next.js)
     needs: test
     runs-on: ubuntu-latest
     outputs:
@@ -76,7 +76,8 @@ jobs:
       - name: Build and push
         run: |
           docker build -t $ECR_UI_URI:${{ steps.meta.outputs.tag }} \
-            -f apps/platform-ui/Dockerfile .
+            -f apps/platform-ui-next/Dockerfile \
+            apps/platform-ui-next/
           docker push $ECR_UI_URI:${{ steps.meta.outputs.tag }}
           docker tag $ECR_UI_URI:${{ steps.meta.outputs.tag }} $ECR_UI_URI:latest
           docker push $ECR_UI_URI:latest
@@ -173,9 +174,17 @@ jobs:
       - name: Smoke test prod
         run: |
           ALB="http://cai-platform-alb-472989822.us-east-2.elb.amazonaws.com"
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$ALB/health")
-          if [ "$STATUS" != "200" ]; then
-            echo "Prod smoke test failed: /health returned $STATUS"
+          # Check platform-api health
+          API_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$ALB/health")
+          if [ "$API_STATUS" != "200" ]; then
+            echo "Prod smoke test failed: /health returned $API_STATUS"
             exit 1
           fi
-          echo "Prod smoke test passed"
+          echo "platform-api smoke test passed (HTTP $API_STATUS)"
+          # Check platform-ui (Next.js) health
+          UI_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$ALB/ui/api/health")
+          if [ "$UI_STATUS" != "200" ]; then
+            echo "Prod UI smoke test failed: /ui/api/health returned $UI_STATUS"
+            exit 1
+          fi
+          echo "platform-ui smoke test passed (HTTP $UI_STATUS)"
