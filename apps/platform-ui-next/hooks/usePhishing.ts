@@ -40,7 +40,7 @@ export function usePhishing() {
 
       // 2. Attach input artifact
       const { artifact } = await api.post<{ artifact: { artifact_id: string } }>(
-        `cases/${newCase.case_id}/artifacts`,
+        `cases/${newCase.case_id}/artifacts/input`,
         {
           artifact_type: "phishing_email",
           payload,

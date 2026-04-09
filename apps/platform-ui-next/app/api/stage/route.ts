@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
 
     // 3. Attach the ZIP reference as input artifact
     const { artifact } = await call<{ artifact: { artifact_id: string } }>(
-      `cases/${caseId}/artifacts`,
+      `cases/${caseId}/artifacts/input`,
       "POST",
       {
         artifact_type: "watchguard_workspace_zip",

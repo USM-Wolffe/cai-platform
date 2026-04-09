@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
 
     // ── Phase 1: Attach traffic artifact ──────────────────────────────────
     const { artifact: trafficArt } = await call<{ artifact: { artifact_id: string } }>(
-      `cases/${caseId}/artifacts`,
+      `cases/${caseId}/artifacts/input`,
       "POST",
       {
         artifact_type: "multi_source_log_input",
@@ -68,7 +68,7 @@ export async function POST(req: NextRequest) {
 
     // ── Phase 1: Attach alarm artifact ────────────────────────────────────
     const { artifact: alarmArt } = await call<{ artifact: { artifact_id: string } }>(
-      `cases/${caseId}/artifacts`,
+      `cases/${caseId}/artifacts/input`,
       "POST",
       {
         artifact_type: "multi_source_log_input",
