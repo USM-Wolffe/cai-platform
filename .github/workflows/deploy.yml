@@ -92,6 +92,19 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           aws-access-key-id: ${{ secrets.CI_AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.CI_AWS_SECRET_ACCESS_KEY }}
+      - name: Update UI staging target group health check path
+        run: |
+          TG_ARN=$(aws ecs describe-services \
+            --cluster $ECS_CLUSTER \
+            --services platform-ui-staging \
+            --region $AWS_REGION \
+            --query 'services[0].loadBalancers[0].targetGroupArn' \
+            --output text)
+          echo "Updating health check path for TG: $TG_ARN"
+          aws elbv2 modify-target-group \
+            --target-group-arn "$TG_ARN" \
+            --health-check-path /ui/api/health \
+            --region $AWS_REGION
       - name: Deploy API staging
         run: |
           aws ecs update-service \
@@ -150,6 +163,19 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           aws-access-key-id: ${{ secrets.CI_AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.CI_AWS_SECRET_ACCESS_KEY }}
+      - name: Update UI prod target group health check path
+        run: |
+          TG_ARN=$(aws ecs describe-services \
+            --cluster $ECS_CLUSTER \
+            --services platform-ui \
+            --region $AWS_REGION \
+            --query 'services[0].loadBalancers[0].targetGroupArn' \
+            --output text)
+          echo "Updating health check path for TG: $TG_ARN"
+          aws elbv2 modify-target-group \
+            --target-group-arn "$TG_ARN" \
+            --health-check-path /ui/api/health \
+            --region $AWS_REGION
       - name: Deploy platform-api prod
         run: |
           aws ecs update-service \
