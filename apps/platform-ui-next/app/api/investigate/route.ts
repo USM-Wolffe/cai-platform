@@ -44,7 +44,9 @@ export async function POST(req: NextRequest) {
     // ── Phase 1: Create case ──────────────────────────────────────────────
     const { case: newCase } = await call<{ case: { case_id: string } }>("cases", "POST", {
       client_id,
+      workflow_type: "log_investigation",
       title: `WatchGuard investigation — ${workspace_id}`,
+      summary: `Automated blue team analysis of WatchGuard logs from workspace ${workspace_id}.`,
       metadata: { source: "watchguard", workspace_id },
     });
     const caseId = newCase.case_id;
@@ -82,6 +84,8 @@ export async function POST(req: NextRequest) {
     // ── Phase 1: Create run ───────────────────────────────────────────────
     const { run } = await call<{ run: { run_id: string } }>("runs", "POST", {
       case_id: caseId,
+      backend_id: "multi_source_logs",
+      input_artifact_ids: [trafficArt.artifact_id, alarmArt.artifact_id],
     });
     const runId = run.run_id;
 

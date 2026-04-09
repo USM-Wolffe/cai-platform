@@ -46,7 +46,9 @@ export async function POST(req: NextRequest) {
     // 2. Create a staging-only case under watchguard_logs
     const { case: stagingCase } = await call<{ case: { case_id: string } }>("cases", "POST", {
       client_id,
+      workflow_type: "forensic_investigation",
       title: `WatchGuard Staging — ${workspace_id}`,
+      summary: `Workspace staging for blue team investigation of ${workspace_id}.`,
       metadata: { source: "watchguard_staging", workspace_id },
     });
     const caseId = stagingCase.case_id;

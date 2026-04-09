@@ -33,7 +33,9 @@ export function usePhishing() {
       // 1. Create case
       const { case: newCase } = await api.post<{ case: { case_id: string } }>("cases", {
         client_id: CLIENT_ID,
+        workflow_type: "log_investigation",
         title: `Phishing analysis — ${new Date().toISOString()}`,
+        summary: "Automated phishing email investigation.",
       });
 
       // 2. Attach input artifact
@@ -48,6 +50,8 @@ export function usePhishing() {
       // 3. Create run
       const { run } = await api.post<{ run: { run_id: string } }>("runs", {
         case_id: newCase.case_id,
+        backend_id: "phishing_email",
+        input_artifact_ids: [artifact.artifact_id],
       });
 
       // 4. Run phishing assessment observation

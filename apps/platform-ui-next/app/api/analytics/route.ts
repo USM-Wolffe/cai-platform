@@ -44,7 +44,9 @@ export async function POST(req: NextRequest) {
     // 2. Create a minimal analytics case under watchguard_logs
     const { case: analyticsCase } = await call<{ case: { case_id: string } }>("cases", "POST", {
       client_id,
+      workflow_type: "log_investigation",
       title: `WatchGuard Analytics — ${workspace_id}`,
+      summary: `DDoS analytics for workspace ${workspace_id}.`,
       metadata: { source: "watchguard_analytics", workspace_id },
     });
     const caseId = analyticsCase.case_id;
