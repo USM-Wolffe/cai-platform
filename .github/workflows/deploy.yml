@@ -128,24 +128,30 @@ jobs:
             --services platform-api-staging platform-ui-staging \
             --region $AWS_REGION
       - name: Smoke test staging
-        # The ALB forwards /staging/* without stripping the prefix, so the API
-        # receives /staging/health (404). Use the ECS target-group health check
-        # instead: poll until the staging API task reports healthy via its
-        # registered target group, then hit /health directly via the task IP.
-        # Simpler: the ECS waiter already confirmed both services are stable
-        # (all tasks passing their health checks), so just verify via AWS CLI.
+        # Poll until rolloutState=COMPLETED (can still be IN_PROGRESS right after
+        # the ECS services-stable waiter, which only checks task health, not the
+        # deployment circuit-breaker flip). Retry for up to 3 minutes.
         run: |
-          HEALTHY=$(aws ecs describe-services \
-            --cluster $ECS_CLUSTER \
-            --services platform-api-staging \
-            --region $AWS_REGION \
-            --query 'services[0].deployments[0].rolloutState' \
-            --output text)
-          if [ "$HEALTHY" != "COMPLETED" ]; then
-            echo "Staging smoke test failed: deployment rollout state is $HEALTHY"
-            exit 1
-          fi
-          echo "Staging smoke test passed (rollout state: $HEALTHY)"
+          for i in $(seq 1 18); do
+            STATE=$(aws ecs describe-services \
+              --cluster $ECS_CLUSTER \
+              --services platform-api-staging \
+              --region $AWS_REGION \
+              --query 'services[0].deployments[0].rolloutState' \
+              --output text)
+            echo "Attempt $i/18 — rolloutState: $STATE"
+            if [ "$STATE" = "COMPLETED" ]; then
+              echo "Staging smoke test passed"
+              exit 0
+            fi
+            if [ "$STATE" = "FAILED" ]; then
+              echo "Staging deployment failed (rolloutState: FAILED)"
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "Staging smoke test timed out waiting for rolloutState=COMPLETED (last: $STATE)"
+          exit 1
       - name: Scale down staging after validation
         if: always()
         run: |
