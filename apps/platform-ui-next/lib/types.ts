@@ -102,7 +102,7 @@ export interface ArtifactResponse {
 }
 
 export interface CasesListResponse {
-  cases: Case[];
+  cases: Array<{ case: Case }>;
 }
 
 // Investigation states

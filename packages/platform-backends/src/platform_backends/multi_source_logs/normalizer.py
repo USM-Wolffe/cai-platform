@@ -491,6 +491,19 @@ def _download_traffic_staging(s3, staging_prefix: str, bucket: str, region: str,
     try:
         con.execute("INSTALL httpfs; LOAD httpfs;")
         con.execute(f"SET s3_region='{region}';")
+        # Propagate boto3 credentials (IAM role, env vars, ~/.aws/credentials)
+        try:
+            import boto3 as _boto3
+            _session = _boto3.Session()
+            _creds = _session.get_credentials()
+            if _creds is not None:
+                _frozen = _creds.get_frozen_credentials()
+                con.execute(f"SET s3_access_key_id='{_frozen.access_key}';")
+                con.execute(f"SET s3_secret_access_key='{_frozen.secret_key}';")
+                if _frozen.token:
+                    con.execute(f"SET s3_session_token='{_frozen.token}';")
+        except Exception:
+            pass  # no credentials available — DuckDB will try anonymously
         # Read positional columns; DuckDB auto-detects no-header CSV
         result = con.execute(
             f"SELECT * FROM read_csv_auto('{s3_glob}', header=false, "

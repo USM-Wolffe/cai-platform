@@ -22,8 +22,8 @@ export function CasesSheet({ open, onClose }: CasesSheetProps) {
     if (!open) return;
     setLoading(true);
     api
-      .get<{ cases: Case[] }>(`cases?client_id=${CLIENT_ID}&limit=20`)
-      .then((r) => setCases(r.cases ?? []))
+      .get<{ cases: Array<{ case: Case }> }>(`cases?client_id=${CLIENT_ID}&limit=20`)
+      .then((r) => setCases((r.cases ?? []).map((item) => item.case)))
       .catch(() => setCases([]))
       .finally(() => setLoading(false));
   }, [open]);
