@@ -33,11 +33,21 @@ export async function POST(req: NextRequest) {
 
   try {
     // ── Phase 1: Discover staging prefix ──────────────────────────────────
-    const stagingInfo = await call<{
-      staging_prefix: string;
-      bucket: string;
-      region: string;
-    }>(`s3/workspaces/${workspace_id}/latest-staging`);
+    let stagingInfo: { staging_prefix: string; bucket: string; region: string };
+    try {
+      stagingInfo = await call<{ staging_prefix: string; bucket: string; region: string }>(
+        `s3/workspaces/${workspace_id}/latest-staging`,
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "";
+      if (msg.includes("404") || msg.toLowerCase().includes("no staging")) {
+        return NextResponse.json(
+          { error: `El workspace '${workspace_id}' no tiene datos staged. Usá "Upload new ZIP" para procesarlo primero.` },
+          { status: 400 },
+        );
+      }
+      throw e;
+    }
 
     const { staging_prefix, bucket, region } = stagingInfo;
 
@@ -191,7 +201,7 @@ export async function POST(req: NextRequest) {
       // CAI unavailable — use deterministic fallback (already set above)
     }
 
-    return NextResponse.json({
+    const result = {
       case_id: caseId,
       run_id: runId,
       workspace_id,
@@ -205,10 +215,63 @@ export async function POST(req: NextRequest) {
       nist_phase: nistPhase,
       recommended_actions: recommendedActions,
       evidence_summary: evidenceSummary,
-    });
+    };
+
+    // ── Store result as a case artifact for future cache retrieval ─────────
+    call(`cases/${caseId}/artifacts/input`, "POST", {
+      payload: { ...result, _subtype: "watchguard_investigation_result" },
+      summary: `Investigation result — ${workspace_id}`,
+      metadata: { subtype: "watchguard_investigation_result", workspace_id },
+    }).catch(() => {});
+
+    return NextResponse.json(result);
   } catch (e) {
     const message = e instanceof Error ? e.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+// ── GET: return cached result for a workspace without re-running ─────────────
+export async function GET(req: NextRequest) {
+  const workspace_id = req.nextUrl.searchParams.get("workspace_id");
+  const client_id = req.nextUrl.searchParams.get("client_id") ?? "egs";
+
+  if (!workspace_id) return NextResponse.json({ cached: null });
+
+  try {
+    const casesData = await call<{
+      cases: Array<{ case: { case_id: string; metadata: Record<string, unknown>; created_at: string } }>;
+    }>(`cases?client_id=${client_id}&limit=100`);
+
+    const wgCases = casesData.cases
+      .map((c) => c.case)
+      .filter((c) => c.metadata?.workspace_id === workspace_id && c.metadata?.source === "watchguard")
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    for (const wgCase of wgCases) {
+      const caseDetail = await call<{
+        case: unknown;
+        artifacts: Array<{ artifact_id: string }>;
+      }>(`cases/${wgCase.case_id}`).catch(() => null);
+      if (!caseDetail) continue;
+
+      for (const artRef of caseDetail.artifacts ?? []) {
+        const content = await call<{ artifact: unknown; content: Record<string, unknown> }>(
+          `artifacts/${artRef.artifact_id}/content`,
+        ).catch(() => null);
+        if (!content?.content) continue;
+        const c = content.content as Record<string, unknown>;
+        if (c._subtype === "watchguard_investigation_result") {
+          const { _subtype, ...result } = c;
+          void _subtype;
+          return NextResponse.json({ cached: { ...result, _cached_at: wgCase.created_at } });
+        }
+      }
+    }
+
+    return NextResponse.json({ cached: null });
+  } catch {
+    return NextResponse.json({ cached: null });
   }
 }
 

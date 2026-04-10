@@ -11,6 +11,7 @@ export interface InvestigationState {
   stepsDone: number;
   stepsTotal: number;
   result: WatchGuardResult | null;
+  cachedAt: string | null;
   error: string | null;
 }
 
@@ -20,12 +21,40 @@ const IDLE: InvestigationState = {
   stepsDone: 0,
   stepsTotal: 9,
   result: null,
+  cachedAt: null,
   error: null,
 };
 
 export function useInvestigation() {
   const [state, setState] = useState<InvestigationState>(IDLE);
 
+  /** Load a previous result without re-running the pipeline. */
+  const loadCached = useCallback(async (workspaceId: string) => {
+    setState({ ...IDLE, phase: "idle" });
+    try {
+      const res = await fetch(
+        `/ui/api/investigate?workspace_id=${encodeURIComponent(workspaceId)}&client_id=${CLIENT_ID}`,
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.cached) {
+        const { _cached_at, ...result } = data.cached as WatchGuardResult & { _cached_at?: string };
+        setState({
+          phase: "done",
+          stepLabel: "Complete",
+          stepsDone: 9,
+          stepsTotal: 9,
+          result: result as WatchGuardResult,
+          cachedAt: _cached_at ?? null,
+          error: null,
+        });
+      }
+    } catch {
+      // silent — no cached result available
+    }
+  }, []);
+
+  /** Run a fresh investigation from scratch. */
   const start = useCallback(async (workspaceId: string) => {
     setState({
       phase: "staging",
@@ -33,12 +62,11 @@ export function useInvestigation() {
       stepsDone: 0,
       stepsTotal: 9,
       result: null,
+      cachedAt: null,
       error: null,
     });
 
     try {
-      // Call the investigation route (basePath /ui is the browser prefix for the page,
-      // but fetch with absolute path needs it too since basePath isn't auto-prepended for fetch)
       const res = await fetch(`/ui/api/investigate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -46,10 +74,10 @@ export function useInvestigation() {
       });
 
       if (!res.ok) {
-        throw new Error(`Investigation failed: ${res.status}`);
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error ?? `Investigation failed: ${res.status}`);
       }
 
-      // Stream progress if available, otherwise poll
       const data = await res.json();
       setState({
         phase: "done",
@@ -57,6 +85,7 @@ export function useInvestigation() {
         stepsDone: 9,
         stepsTotal: 9,
         result: data as WatchGuardResult,
+        cachedAt: null,
         error: null,
       });
     } catch (e) {
@@ -70,5 +99,5 @@ export function useInvestigation() {
 
   const reset = useCallback(() => setState(IDLE), []);
 
-  return { state, start, reset };
+  return { state, start, loadCached, reset };
 }

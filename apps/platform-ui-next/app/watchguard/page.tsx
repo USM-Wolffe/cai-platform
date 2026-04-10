@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { PlayCircle, Shield, Upload, FolderOpen } from "lucide-react";
+import { useState, useEffect } from "react";
+import { PlayCircle, Shield, Upload, FolderOpen, RefreshCw, Clock } from "lucide-react";
 import { WorkspaceSelector } from "@/components/watchguard/WorkspaceSelector";
 import { UploadZone } from "@/components/watchguard/UploadZone";
 import { InvestigationProgress } from "@/components/watchguard/InvestigationProgress";
@@ -11,11 +11,32 @@ import { cn } from "@/lib/utils";
 
 type InputMode = "select" | "upload";
 
+function timeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 2) return "justo ahora";
+  if (mins < 60) return `hace ${mins} min`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `hace ${hrs}h`;
+  const days = Math.floor(hrs / 24);
+  return `hace ${days}d`;
+}
+
 export default function WatchGuardPage() {
   const [mode, setMode] = useState<InputMode>("select");
   const [workspaceId, setWorkspaceId] = useState("");
   const [uploadWorkspaceId, setUploadWorkspaceId] = useState("");
-  const { state, start, reset } = useInvestigation();
+  const { state, start, loadCached, reset } = useInvestigation();
+
+  const activeWorkspace = mode === "select" ? workspaceId : uploadWorkspaceId;
+  const canStart = activeWorkspace.trim() !== "" && state.phase === "idle";
+
+  // Auto-load cached result when workspace is selected
+  useEffect(() => {
+    if (workspaceId && mode === "select") {
+      loadCached(workspaceId);
+    }
+  }, [workspaceId, mode, loadCached]);
 
   // After a ZIP is staged, switch to select mode with the workspace pre-filled
   const handleStaged = (wsId: string) => {
@@ -23,15 +44,29 @@ export default function WatchGuardPage() {
     setMode("select");
   };
 
-  const activeWorkspace = mode === "select" ? workspaceId : uploadWorkspaceId;
-  const canStart = activeWorkspace.trim() !== "" && state.phase === "idle";
-
   if (state.phase === "done" && state.result) {
     return (
       <div className="flex flex-col gap-8 p-8">
-        <div>
-          <h1 className="text-xl font-semibold text-foreground">WatchGuard Investigation</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Blue team analysis results</p>
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="text-xl font-semibold text-foreground">WatchGuard Investigation</h1>
+            <p className="mt-1 text-sm text-muted-foreground">Blue team analysis results</p>
+          </div>
+          {state.cachedAt && (
+            <div className="flex items-center gap-3">
+              <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Clock className="size-3.5" />
+                Investigación guardada {timeAgo(state.cachedAt)}
+              </span>
+              <button
+                onClick={() => start(state.result!.workspace_id)}
+                className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
+              >
+                <RefreshCw className="size-3.5" />
+                Re-investigar
+              </button>
+            </div>
+          )}
         </div>
         <InvestigationResults result={state.result} onReset={reset} />
       </div>
