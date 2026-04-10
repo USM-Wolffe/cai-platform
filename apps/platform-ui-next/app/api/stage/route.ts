@@ -58,7 +58,6 @@ export async function POST(req: NextRequest) {
       `cases/${caseId}/artifacts/input`,
       "POST",
       {
-        artifact_type: "watchguard_workspace_zip",
         payload: {
           source: "workspace_s3_zip",
           workspace: workspace_id,
@@ -82,7 +81,7 @@ export async function POST(req: NextRequest) {
       `runs/${run.run_id}/observations/watchguard-stage-workspace-zip`,
       "POST",
       {
-        input_artifact_ids: [artifact.artifact_id],
+        input_artifact_id: artifact.artifact_id,
         requested_by: "platform-ui",
       },
     );

@@ -56,7 +56,6 @@ export async function POST(req: NextRequest) {
       `cases/${caseId}/artifacts/input`,
       "POST",
       {
-        artifact_type: "multi_source_log_input",
         payload: {
           source_type: "watchguard_traffic",
           staging_prefix,
@@ -71,7 +70,6 @@ export async function POST(req: NextRequest) {
       `cases/${caseId}/artifacts/input`,
       "POST",
       {
-        artifact_type: "multi_source_log_input",
         payload: {
           source_type: "watchguard_alarm",
           staging_prefix,
@@ -89,35 +87,35 @@ export async function POST(req: NextRequest) {
     });
     const runId = run.run_id;
 
-    const trafficInput = [trafficArt.artifact_id];
-    const alarmInput = [alarmArt.artifact_id];
+    const trafficId = trafficArt.artifact_id;
+    const alarmId = alarmArt.artifact_id;
 
     // ── Phase 2: Traffic observations ─────────────────────────────────────
     const [normObs, failedAuthObs, lateralObs, privEscObs, dnsObs] = await Promise.all([
       call<{ artifacts: Array<{ artifact_id: string }> }>(
         `runs/${runId}/observations/multi-source-logs-normalize`,
         "POST",
-        { input_artifact_ids: trafficInput },
+        { input_artifact_id: trafficId },
       ),
       call<{ artifacts: Array<{ artifact_id: string }> }>(
         `runs/${runId}/observations/multi-source-logs-failed-auth-detect`,
         "POST",
-        { input_artifact_ids: trafficInput },
+        { input_artifact_id: trafficId },
       ),
       call<{ artifacts: Array<{ artifact_id: string }> }>(
         `runs/${runId}/observations/multi-source-logs-lateral-movement-detect`,
         "POST",
-        { input_artifact_ids: trafficInput },
+        { input_artifact_id: trafficId },
       ),
       call<{ artifacts: Array<{ artifact_id: string }> }>(
         `runs/${runId}/observations/multi-source-logs-privilege-escalation-detect`,
         "POST",
-        { input_artifact_ids: trafficInput },
+        { input_artifact_id: trafficId },
       ),
       call<{ artifacts: Array<{ artifact_id: string }> }>(
         `runs/${runId}/observations/multi-source-logs-dns-anomaly-detect`,
         "POST",
-        { input_artifact_ids: trafficInput },
+        { input_artifact_id: trafficId },
       ),
     ]);
 
@@ -125,23 +123,14 @@ export async function POST(req: NextRequest) {
     const threatsObs = await call<{ artifacts: Array<{ artifact_id: string }> }>(
       `runs/${runId}/observations/multi-source-logs-active-threats-detect`,
       "POST",
-      { input_artifact_ids: alarmInput },
+      { input_artifact_id: alarmId },
     );
 
-    // ── Phase 2: Cross-source correlate ──────────────────────────────────
-    const allArtifactIds = [
-      ...(normObs.artifacts ?? []),
-      ...(failedAuthObs.artifacts ?? []),
-      ...(lateralObs.artifacts ?? []),
-      ...(privEscObs.artifacts ?? []),
-      ...(dnsObs.artifacts ?? []),
-      ...(threatsObs.artifacts ?? []),
-    ].map((a) => a.artifact_id);
-
+    // ── Phase 2: Cross-source correlate (uses run's first input artifact) ─
     const crossObs = await call<{ artifacts: Array<{ artifact_id: string }> }>(
       `runs/${runId}/observations/multi-source-logs-cross-source-correlate`,
       "POST",
-      { input_artifact_ids: allArtifactIds },
+      { input_artifact_id: trafficId },
     );
 
     // ── Phase 2: Complete run ─────────────────────────────────────────────

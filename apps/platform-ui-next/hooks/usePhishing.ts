@@ -41,10 +41,7 @@ export function usePhishing() {
       // 2. Attach input artifact
       const { artifact } = await api.post<{ artifact: { artifact_id: string } }>(
         `cases/${newCase.case_id}/artifacts/input`,
-        {
-          artifact_type: "phishing_email",
-          payload,
-        },
+        { payload },
       );
 
       // 3. Create run
@@ -57,7 +54,7 @@ export function usePhishing() {
       // 4. Run phishing assessment observation
       const obs = await api.post<{ artifacts: Array<{ artifact_id: string }> }>(
         `runs/${run.run_id}/observations/phishing-email-basic-assessment`,
-        { input_artifact_ids: [artifact.artifact_id] },
+        { input_artifact_id: artifact.artifact_id },
       );
 
       // 5. Fetch result artifact content

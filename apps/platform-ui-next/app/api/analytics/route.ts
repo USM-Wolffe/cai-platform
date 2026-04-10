@@ -51,12 +51,11 @@ export async function POST(req: NextRequest) {
     });
     const caseId = analyticsCase.case_id;
 
-    // 3. Attach a staging manifest artifact (minimal fields required by _parse_staging_manifest)
+    // 3. Attach a staging manifest artifact
     const { artifact } = await call<{ artifact: { artifact_id: string } }>(
       `cases/${caseId}/artifacts/input`,
       "POST",
       {
-        artifact_type: "watchguard_staging_manifest",
         payload: {
           source: "workspace_staging",
           workspace: workspace_id,
@@ -74,7 +73,7 @@ export async function POST(req: NextRequest) {
     });
     const runId = run.run_id;
 
-    const obsInput = { input_artifact_ids: [artifact.artifact_id] };
+    const obsInput = { input_artifact_id: artifact.artifact_id };
 
     // 5. Run analytics observations in parallel
     const [topSourcesRes, temporalRes, protocolRes] = await Promise.all([
