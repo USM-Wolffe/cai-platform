@@ -478,7 +478,11 @@ def download_staging_lines(
 
 
 def _download_traffic_staging(s3, staging_prefix: str, bucket: str, region: str, max_rows: int) -> list[str]:
-    """Sample traffic CSV lines from staged workspace using DuckDB."""
+    """Sample traffic CSV lines from staged workspace using DuckDB.
+
+    Files are stored under {staging_prefix}/traffic/{date}/*.csv (date sub-folders),
+    so we enumerate them via boto3 first, then pass the explicit list to DuckDB.
+    """
     try:
         import duckdb
     except ImportError as exc:
@@ -486,7 +490,21 @@ def _download_traffic_staging(s3, staging_prefix: str, bucket: str, region: str,
             "duckdb is required to read staged traffic data. Install it or use raw_log_lines."
         ) from exc
 
-    s3_glob = f"s3://{bucket}/{staging_prefix}/traffic/*.csv"
+    # Enumerate all CSV files recursively under traffic/
+    prefix = f"{staging_prefix}/traffic/"
+    paginator = s3.get_paginator("list_objects_v2")
+    files: list[str] = []
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            if key.endswith((".csv", ".txt")):
+                files.append(f"s3://{bucket}/{key}")
+
+    if not files:
+        raise MultiSourceLogsBackendError(
+            f"No traffic CSV files found under s3://{bucket}/{prefix}"
+        )
+
     con = duckdb.connect()
     try:
         con.execute("INSTALL httpfs; LOAD httpfs;")
@@ -494,8 +512,7 @@ def _download_traffic_staging(s3, staging_prefix: str, bucket: str, region: str,
         # Propagate boto3 credentials (IAM role, env vars, ~/.aws/credentials)
         try:
             import boto3 as _boto3
-            _session = _boto3.Session()
-            _creds = _session.get_credentials()
+            _creds = _boto3.Session().get_credentials()
             if _creds is not None:
                 _frozen = _creds.get_frozen_credentials()
                 con.execute(f"SET s3_access_key_id='{_frozen.access_key}';")
@@ -503,20 +520,18 @@ def _download_traffic_staging(s3, staging_prefix: str, bucket: str, region: str,
                 if _frozen.token:
                     con.execute(f"SET s3_session_token='{_frozen.token}';")
         except Exception:
-            pass  # no credentials available — DuckDB will try anonymously
-        # Read positional columns; DuckDB auto-detects no-header CSV
+            pass
         result = con.execute(
-            f"SELECT * FROM read_csv_auto('{s3_glob}', header=false, "
+            f"SELECT * FROM read_csv({files!r}, header=false, "
             f"ignore_errors=true) LIMIT {max_rows}"
         ).fetchall()
     except Exception as exc:
         raise MultiSourceLogsBackendError(
-            f"DuckDB failed to read traffic CSV from {s3_glob}: {exc}"
+            f"DuckDB failed to read traffic CSV files: {exc}"
         ) from exc
     finally:
         con.close()
 
-    # Re-encode rows back to CSV strings (matching the positional format the parser expects)
     lines: list[str] = []
     for row in result:
         lines.append(",".join("" if v is None else str(v) for v in row))
