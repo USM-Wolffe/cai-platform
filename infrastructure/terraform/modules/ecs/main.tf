@@ -11,7 +11,6 @@ variable "subnet_ids"         { type = list(string) }
 variable "security_group_id"  { type = string }
 variable "alb_api_tg_arn"     { type = string }
 variable "alb_ui_tg_arn"      { type = string }
-variable "db_secret_arn"      { type = string }
 variable "s3_bucket"          { type = string }
 variable "api_desired_count"  { type = number }
 variable "ui_desired_count"   { type = number }
@@ -41,8 +40,8 @@ resource "aws_ecs_task_definition" "api" {
   family                   = "${var.name_prefix}-api${local.svc_suffix}"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 1024
-  memory                   = 4096
+  cpu                      = 512   # 0.5 vCPU — sufficient for FastAPI + DuckDB on staged CSVs
+  memory                   = 2048  # 2 GB — headroom for DuckDB on large log sets
   execution_role_arn       = var.execution_role_arn
   task_role_arn            = var.task_role_arn
   tags                     = var.tags
@@ -55,11 +54,8 @@ resource "aws_ecs_task_definition" "api" {
     environment = [
       { name = "PLATFORM_API_HOST", value = "0.0.0.0" },
       { name = "PLATFORM_API_PORT", value = "8000" }
+      # No DATABASE_URL → API runs in-memory mode (RDS removed to save costs)
     ]
-    secrets = [{
-      name      = "DATABASE_URL"
-      valueFrom = "${var.db_secret_arn}:DATABASE_URL::"
-    }]
     logConfiguration = {
       logDriver = "awslogs"
       options = {
@@ -107,8 +103,8 @@ resource "aws_ecs_task_definition" "ui" {
   family                   = "${var.name_prefix}-ui${local.svc_suffix}"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 1024
-  memory                   = 4096
+  cpu                      = 256  # 0.25 vCPU — UI just serves Next.js pages, no heavy compute
+  memory                   = 512  # 512 MB — sufficient for Next.js SSR
   execution_role_arn       = var.execution_role_arn
   task_role_arn            = var.task_role_arn
   tags                     = var.tags

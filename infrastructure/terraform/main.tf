@@ -79,15 +79,6 @@ module "s3" {
   tags        = local.tags
 }
 
-module "rds" {
-  source      = "./modules/rds"
-  name_prefix = local.name_prefix
-  subnet_ids  = data.aws_subnets.default.ids
-  vpc_id      = data.aws_vpc.default.id
-  environment = var.environment
-  tags        = local.tags
-}
-
 module "alb" {
   source      = "./modules/alb"
   name_prefix = local.name_prefix
@@ -111,7 +102,6 @@ module "ecs" {
   security_group_id   = aws_security_group.ecs.id
   alb_api_tg_arn      = module.alb.api_target_group_arn
   alb_ui_tg_arn       = module.alb.ui_target_group_arn
-  db_secret_arn       = module.rds.secret_arn
   s3_bucket           = var.s3_bucket
   api_desired_count   = var.api_desired_count
   ui_desired_count    = var.ui_desired_count
