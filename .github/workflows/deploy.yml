@@ -8,9 +8,8 @@ on:
 
 env:
   AWS_REGION: us-east-2
-  ECR_API_URI: 942454901447.dkr.ecr.us-east-2.amazonaws.com/cai-platform/platform-api
-  ECR_UI_URI: 942454901447.dkr.ecr.us-east-2.amazonaws.com/cai-platform/platform-ui
   ECS_CLUSTER: cai-platform
+  ECR_NAME_PREFIX: cai-platform
 
 jobs:
   test:
@@ -37,6 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image-tag: ${{ steps.meta.outputs.tag }}
+      ecr-uri: ${{ steps.ecr.outputs.uri }}
     steps:
       - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4
@@ -45,16 +45,22 @@ jobs:
           aws-access-key-id: ${{ secrets.CI_AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.CI_AWS_SECRET_ACCESS_KEY }}
       - uses: aws-actions/amazon-ecr-login@v2
+      - name: Resolve ECR URI
+        id: ecr
+        run: |
+          ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+          echo "uri=${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_NAME_PREFIX}/platform-api" >> $GITHUB_OUTPUT
       - name: Set image tag
         id: meta
         run: echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
       - name: Build and push
         run: |
-          docker build -t $ECR_API_URI:${{ steps.meta.outputs.tag }} \
+          ECR_URI=${{ steps.ecr.outputs.uri }}
+          docker build -t $ECR_URI:${{ steps.meta.outputs.tag }} \
             -f apps/platform-api/Dockerfile .
-          docker push $ECR_API_URI:${{ steps.meta.outputs.tag }}
-          docker tag $ECR_API_URI:${{ steps.meta.outputs.tag }} $ECR_API_URI:latest
-          docker push $ECR_API_URI:latest
+          docker push $ECR_URI:${{ steps.meta.outputs.tag }}
+          docker tag $ECR_URI:${{ steps.meta.outputs.tag }} $ECR_URI:latest
+          docker push $ECR_URI:latest
 
   build-and-push-ui:
     name: Build & push platform-ui (Next.js)
@@ -62,6 +68,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image-tag: ${{ steps.meta.outputs.tag }}
+      ecr-uri: ${{ steps.ecr.outputs.uri }}
     steps:
       - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4
@@ -70,17 +77,23 @@ jobs:
           aws-access-key-id: ${{ secrets.CI_AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.CI_AWS_SECRET_ACCESS_KEY }}
       - uses: aws-actions/amazon-ecr-login@v2
+      - name: Resolve ECR URI
+        id: ecr
+        run: |
+          ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+          echo "uri=${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_NAME_PREFIX}/platform-ui" >> $GITHUB_OUTPUT
       - name: Set image tag
         id: meta
         run: echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
       - name: Build and push
         run: |
-          docker build -t $ECR_UI_URI:${{ steps.meta.outputs.tag }} \
+          ECR_URI=${{ steps.ecr.outputs.uri }}
+          docker build -t $ECR_URI:${{ steps.meta.outputs.tag }} \
             -f apps/platform-ui-next/Dockerfile \
             apps/platform-ui-next/
-          docker push $ECR_UI_URI:${{ steps.meta.outputs.tag }}
-          docker tag $ECR_UI_URI:${{ steps.meta.outputs.tag }} $ECR_UI_URI:latest
-          docker push $ECR_UI_URI:latest
+          docker push $ECR_URI:${{ steps.meta.outputs.tag }}
+          docker tag $ECR_URI:${{ steps.meta.outputs.tag }} $ECR_URI:latest
+          docker push $ECR_URI:latest
 
   deploy-staging:
     name: Deploy to staging
@@ -92,19 +105,6 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           aws-access-key-id: ${{ secrets.CI_AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.CI_AWS_SECRET_ACCESS_KEY }}
-      - name: Update UI staging target group health check path
-        run: |
-          TG_ARN=$(aws ecs describe-services \
-            --cluster $ECS_CLUSTER \
-            --services platform-ui-staging \
-            --region $AWS_REGION \
-            --query 'services[0].loadBalancers[0].targetGroupArn' \
-            --output text)
-          echo "Updating health check path for TG: $TG_ARN"
-          aws elbv2 modify-target-group \
-            --target-group-arn "$TG_ARN" \
-            --health-check-path /ui/api/health \
-            --region $AWS_REGION
       - name: Deploy API staging
         run: |
           aws ecs update-service \
@@ -129,8 +129,7 @@ jobs:
             --region $AWS_REGION
       - name: Smoke test staging
         # Poll until rolloutState=COMPLETED (can still be IN_PROGRESS right after
-        # the ECS services-stable waiter, which only checks task health, not the
-        # deployment circuit-breaker flip). Retry for up to 3 minutes.
+        # the ECS services-stable waiter). Retry for up to 3 minutes.
         run: |
           for i in $(seq 1 18); do
             STATE=$(aws ecs describe-services \
@@ -169,19 +168,6 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           aws-access-key-id: ${{ secrets.CI_AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.CI_AWS_SECRET_ACCESS_KEY }}
-      - name: Update UI prod target group health check path
-        run: |
-          TG_ARN=$(aws ecs describe-services \
-            --cluster $ECS_CLUSTER \
-            --services platform-ui \
-            --region $AWS_REGION \
-            --query 'services[0].loadBalancers[0].targetGroupArn' \
-            --output text)
-          echo "Updating health check path for TG: $TG_ARN"
-          aws elbv2 modify-target-group \
-            --target-group-arn "$TG_ARN" \
-            --health-check-path /ui/api/health \
-            --region $AWS_REGION
       - name: Deploy platform-api prod
         run: |
           aws ecs update-service \
@@ -201,20 +187,25 @@ jobs:
         run: |
           aws ecs wait services-stable \
             --cluster $ECS_CLUSTER \
-            --services platform-api \
+            --services platform-api platform-ui \
             --region $AWS_REGION
       - name: Smoke test prod
         run: |
-          ALB="http://cai-platform-alb-472989822.us-east-2.elb.amazonaws.com"
+          ALB=$(aws elbv2 describe-load-balancers \
+            --names cai-platform-alb \
+            --query 'LoadBalancers[0].DNSName' \
+            --output text \
+            --region $AWS_REGION)
+          echo "ALB: $ALB"
           # Check platform-api health
-          API_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$ALB/health")
+          API_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://$ALB/health")
           if [ "$API_STATUS" != "200" ]; then
             echo "Prod smoke test failed: /health returned $API_STATUS"
             exit 1
           fi
           echo "platform-api smoke test passed (HTTP $API_STATUS)"
           # Check platform-ui (Next.js) health
-          UI_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$ALB/ui/api/health")
+          UI_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://$ALB/ui/api/health")
           if [ "$UI_STATUS" != "200" ]; then
             echo "Prod UI smoke test failed: /ui/api/health returned $UI_STATUS"
             exit 1

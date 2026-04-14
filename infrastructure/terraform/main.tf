@@ -96,24 +96,26 @@ module "alb" {
 }
 
 module "ecs" {
-  source              = "./modules/ecs"
-  name_prefix         = local.name_prefix
-  environment         = var.environment
-  aws_region          = var.aws_region
-  alb_dns             = module.alb.alb_dns
-  ecr_api_uri         = module.ecr.platform_api_uri
-  ecr_ui_uri          = module.ecr.platform_ui_uri
-  ecr_image_tag       = var.ecr_image_tag
-  execution_role_arn  = module.iam.execution_role_arn
-  task_role_arn       = module.iam.task_role_arn
-  subnet_ids          = data.aws_subnets.default.ids
-  security_group_id   = aws_security_group.ecs.id
-  alb_api_tg_arn      = module.alb.api_target_group_arn
-  alb_ui_tg_arn       = module.alb.ui_target_group_arn
-  s3_bucket           = var.s3_bucket
-  api_desired_count   = var.api_desired_count
-  ui_desired_count    = var.ui_desired_count
-  tags                = local.tags
+  source                  = "./modules/ecs"
+  name_prefix             = local.name_prefix
+  environment             = var.environment
+  aws_region              = var.aws_region
+  alb_dns                 = module.alb.alb_dns
+  ecr_api_uri             = module.ecr.platform_api_uri
+  ecr_ui_uri              = module.ecr.platform_ui_uri
+  ecr_image_tag           = var.ecr_image_tag
+  execution_role_arn      = module.iam.execution_role_arn
+  task_role_arn           = module.iam.task_role_arn
+  subnet_ids              = data.aws_subnets.default.ids
+  security_group_id       = aws_security_group.ecs.id
+  alb_api_tg_arn          = module.alb.api_target_group_arn
+  alb_ui_tg_arn           = module.alb.ui_target_group_arn
+  alb_api_staging_tg_arn  = module.alb.api_staging_tg_arn
+  alb_ui_staging_tg_arn   = module.alb.ui_staging_tg_arn
+  s3_bucket               = var.s3_bucket
+  api_desired_count        = var.api_desired_count
+  ui_desired_count         = var.ui_desired_count
+  tags                    = local.tags
 }
 
 module "monitoring" {

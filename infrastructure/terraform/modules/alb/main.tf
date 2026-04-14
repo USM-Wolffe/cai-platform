@@ -59,7 +59,7 @@ resource "aws_lb_target_group" "ui" {
   vpc_id      = var.vpc_id
   target_type = "ip"
   health_check {
-    path                = "/ui/_stcore/health"
+    path                = "/ui/api/health"
     healthy_threshold   = 2
     unhealthy_threshold = 3
     interval            = 30
@@ -89,7 +89,7 @@ resource "aws_lb_target_group" "ui_staging" {
   vpc_id      = var.vpc_id
   target_type = "ip"
   health_check {
-    path    = "/ui/_stcore/health"
+    path    = "/ui/api/health"
     timeout = 10
   }
   tags = var.tags

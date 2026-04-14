@@ -11,7 +11,7 @@ WATCHGUARD_S3_REGION ?= us-east-2
 TF_DIR ?= infrastructure/terraform
 TF_ENV ?= prod
 
-.PHONY: help install-dev build up down test test-apps api-dev health demo-watchguard demo-phishing-email upload-workspace install-ui install-ui-cai ui tf-locks-table tf-init tf-plan tf-apply tf-import ecs-stop ecs-start
+.PHONY: help install-dev build up down test test-apps api-dev health demo-watchguard demo-phishing-email upload-workspace install-ui install-ui-cai ui tf-bootstrap tf-init tf-plan tf-apply tf-import ecs-stop ecs-start
 
 help:
 	@printf "Available targets:\n"
@@ -30,10 +30,10 @@ help:
 	@printf "  install-ui        Install the Streamlit platform-ui app (without CAI).\n"
 	@printf "  install-ui-cai    Install the Streamlit platform-ui app with CAI agent support.\n"
 	@printf "  ui                Launch the Streamlit platform-ui at http://localhost:8501.\n"
-	@printf "  tf-locks-table    Create DynamoDB table for Terraform state locking (run once per account).\n"
-	@printf "  tf-init           Initialize Terraform (run once). TF_ENV=prod|staging\n"
-	@printf "  tf-plan           Preview infrastructure changes. TF_ENV=prod|staging\n"
-	@printf "  tf-apply          Apply infrastructure changes. TF_ENV=prod|staging\n"
+	@printf "  tf-bootstrap      Create S3 state bucket + DynamoDB lock table (run once per new account).\n"
+	@printf "  tf-init           Initialize Terraform (run after bootstrap).\n"
+	@printf "  tf-plan           Preview infrastructure changes.\n"
+	@printf "  tf-apply          Apply infrastructure changes.\n"
 	@printf "  tf-import         Import existing AWS resources into Terraform state (run once).\n"
 	@printf "  ecs-stop          Scale all ECS services to 0 (cost saving when not in use).\n"
 	@printf "  ecs-start         Scale ECS services back to 1.\n"
@@ -82,23 +82,42 @@ install-ui-cai:
 ui:
 	$(PYTHON) -m streamlit run apps/platform-ui/src/platform_ui/app.py
 
-tf-locks-table:
+tf-bootstrap:
+	@echo "==> Creating S3 bucket for Terraform state: $(WATCHGUARD_S3_BUCKET)"
+	aws s3api create-bucket \
+		--bucket $(WATCHGUARD_S3_BUCKET) \
+		--region $(WATCHGUARD_S3_REGION) \
+		--create-bucket-configuration LocationConstraint=$(WATCHGUARD_S3_REGION) || true
+	aws s3api put-bucket-versioning \
+		--bucket $(WATCHGUARD_S3_BUCKET) \
+		--versioning-configuration Status=Enabled \
+		--region $(WATCHGUARD_S3_REGION)
+	aws s3api put-bucket-encryption \
+		--bucket $(WATCHGUARD_S3_BUCKET) \
+		--server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}' \
+		--region $(WATCHGUARD_S3_REGION)
+	@echo "==> Creating DynamoDB table for Terraform locks"
 	aws dynamodb create-table \
 		--table-name cai-platform-tf-locks \
 		--attribute-definitions AttributeName=LockID,AttributeType=S \
 		--key-schema AttributeName=LockID,KeyType=HASH \
 		--billing-mode PAY_PER_REQUEST \
-		--region $(WATCHGUARD_S3_REGION)
-	@echo "DynamoDB table cai-platform-tf-locks created."
+		--region $(WATCHGUARD_S3_REGION) || true
+	@echo ""
+	@echo "Bootstrap complete. Next steps:"
+	@echo "  1. Edit infrastructure/terraform/versions.tf — update bucket name if different"
+	@echo "  2. Edit infrastructure/terraform/terraform.tfvars — set your values"
+	@echo "  3. make tf-init"
+	@echo "  4. make tf-apply"
 
 tf-init:
 	cd $(TF_DIR) && terraform init
 
 tf-plan:
-	cd $(TF_DIR) && terraform plan -var-file=environments/$(TF_ENV)/terraform.tfvars
+	cd $(TF_DIR) && terraform plan
 
 tf-apply:
-	cd $(TF_DIR) && terraform apply -var-file=environments/$(TF_ENV)/terraform.tfvars
+	cd $(TF_DIR) && terraform apply
 
 tf-import:
 	cd $(TF_DIR) && bash import.sh
