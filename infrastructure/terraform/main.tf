@@ -27,12 +27,12 @@ data "aws_subnets" "default" {
 }
 
 resource "aws_security_group" "ecs" {
-  name        = "${local.name_prefix}-ecs"
-  description = "ECS tasks — allow inbound on API (8000) and UI (8501) ports"
+  name        = "${local.name_prefix}-api-sg"
+  description = "Security group for cai platform-api ECS service"
   vpc_id      = data.aws_vpc.default.id
 
   ingress {
-    description = "platform-api"
+    description = "platform-api from internet"
     from_port   = 8000
     to_port     = 8000
     protocol    = "tcp"
@@ -40,7 +40,15 @@ resource "aws_security_group" "ecs" {
   }
 
   ingress {
-    description = "platform-ui (Streamlit)"
+    description     = "platform-api from ALB"
+    from_port       = 8000
+    to_port         = 8000
+    protocol        = "tcp"
+    security_groups = [module.alb.alb_sg_id]
+  }
+
+  ingress {
+    description = "platform-ui (Next.js)"
     from_port   = 8501
     to_port     = 8501
     protocol    = "tcp"

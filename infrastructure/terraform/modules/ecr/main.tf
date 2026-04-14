@@ -35,7 +35,22 @@ resource "aws_ecr_lifecycle_policy" "platform_api" {
 
 resource "aws_ecr_lifecycle_policy" "platform_ui" {
   repository = aws_ecr_repository.platform_ui.name
-  policy     = aws_ecr_lifecycle_policy.platform_api.policy
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "Expire untagged after 1 day"
+        selection    = { tagStatus = "untagged", countType = "sinceImagePushed", countUnit = "days", countNumber = 1 }
+        action       = { type = "expire" }
+      },
+      {
+        rulePriority = 2
+        description  = "Keep last 5 tagged"
+        selection    = { tagStatus = "tagged", tagPrefixList = ["v", "latest"], countType = "imageCountMoreThan", countNumber = 5 }
+        action       = { type = "expire" }
+      }
+    ]
+  })
 }
 
 output "platform_api_uri" { value = aws_ecr_repository.platform_api.repository_url }

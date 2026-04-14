@@ -71,7 +71,7 @@ resource "aws_iam_user" "github_ci" {
 
 resource "aws_iam_policy" "github_ci" {
   name        = "${var.name_prefix}-github-ci"
-  description = "Minimum permissions for GitHub Actions CI/CD"
+  description = "Permisos mínimos para GitHub Actions CI/CD de cai-platform"
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [

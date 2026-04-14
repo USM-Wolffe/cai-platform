@@ -13,11 +13,6 @@ output "ecr_platform_ui_uri" {
   value       = module.ecr.platform_ui_uri
 }
 
-output "rds_endpoint" {
-  description = "RDS PostgreSQL endpoint"
-  value       = module.rds.endpoint
-  sensitive   = true
-}
 
 output "cloudwatch_dashboard_url" {
   description = "CloudWatch dashboard URL"

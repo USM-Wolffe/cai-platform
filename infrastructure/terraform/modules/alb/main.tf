@@ -3,10 +3,34 @@ variable "subnet_ids"  { type = list(string) }
 variable "vpc_id"      { type = string }
 variable "tags"        { type = map(string) }
 
+resource "aws_security_group" "alb" {
+  name        = "${var.name_prefix}-alb-sg"
+  description = "Security group for cai platform ALB"
+  vpc_id      = var.vpc_id
+
+  ingress {
+    description = "HTTP"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = var.tags
+}
+
 resource "aws_lb" "main" {
   name               = "${var.name_prefix}-alb"
   internal           = false
   load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb.id]
   subnets            = var.subnet_ids
   tags               = var.tags
 }
@@ -119,6 +143,7 @@ resource "aws_lb_listener_rule" "ui_staging" {
 
 output "alb_dns"              { value = aws_lb.main.dns_name }
 output "alb_suffix"           { value = replace(aws_lb.main.arn, ".*loadbalancer/", "") }
+output "alb_sg_id"            { value = aws_security_group.alb.id }
 output "api_target_group_arn" { value = aws_lb_target_group.api.arn }
 output "ui_target_group_arn"  { value = aws_lb_target_group.ui.arn }
 output "api_staging_tg_arn"   { value = aws_lb_target_group.api_staging.arn }
